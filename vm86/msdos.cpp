@@ -982,6 +982,10 @@ extern "C"
         DWORD cbArgs, LPVOID pArgs, LPDWORD pdwRetCode);
     WOWCallback16Ex_t pWOWCallback16Ex;
     static WORD tss[0x68 + 65536 / 8] = { 0 };
+    typedef BOOL (WINAPI *vm_inject_t)(DWORD vpfn16, DWORD dwFlags,
+        DWORD cbArgs, LPVOID pArgs, LPDWORD pdwRetCode);
+    BOOL WINAPI vm_inject(DWORD vpfn16, DWORD dwFlags,
+        DWORD cbArgs, LPVOID pArgs, LPDWORD pdwRetCode);
 	__declspec(dllexport) BOOL init_vm86(BOOL is_vm86)
 	{
         SymInitialize(GetCurrentProcess(), NULL, TRUE);
@@ -998,6 +1002,8 @@ extern "C"
             krnl386 = LoadLibraryA(KRNL386);
         DOSVM_inport = (DOSVM_inport_t)GetProcAddress(krnl386, "DOSVM_inport");
         DOSVM_outport = (DOSVM_outport_t)GetProcAddress(krnl386, "DOSVM_outport");
+        void(WINAPI *set_vm_inject_cb)(vm_inject_t) = (void(WINAPI *)(vm_inject_t))GetProcAddress(krnl386, "set_vm_inject_cb");
+        set_vm_inject_cb(vm_inject);
         inject_event = CreateEventW(NULL, TRUE, FALSE, NULL);
         InitializeCriticalSection(&inject_crit_section);
         pGetpWin16Lock = (GetpWin16Lock_t)GetProcAddress(krnl386, "GetpWin16Lock");
@@ -1007,10 +1013,8 @@ extern "C"
 		AddVectoredExceptionHandler(TRUE, vm86_vectored_exception_handler);
 		WORD sel = SELECTOR_AllocBlock(iret, 256, WINE_LDT_FLAGS_CODE);
 		CPU_INIT_CALL(CPU_MODEL);
-		//enable x87
-		build_x87_opcode_table();
-		build_opcode_table(OP_I386 | OP_FPU | OP_I486);
 		CPU_RESET_CALL(CPU_MODEL);
+		m_cr[0] |= 0x20;  //we don't support irq13 for fpe
         UINT8 *base = 0;//mem;
 		m_idtr.base = (UINT32)(table - base);
         m_ldtr.limit = 65535;
@@ -1400,10 +1404,23 @@ extern "C"
     {
         CONTEXT context;
         DWORD ret;
+        static char intstack[4096];
+        static WORD intstksel = 0;
+        if (!intstksel)
+            intstksel = SELECTOR_AllocBlock(intstack, 4096, WINE_LDT_FLAGS_DATA);
+                    
         save_context(&context);
         EnterCriticalSection(&inject_crit_section);
+        WORD sp = context.Esp;
+        DWORD ss_base = m_sreg[SS].base;
+        if (m_sreg[SS].d) // don't call int handler on a large stack
         {
-            char *stack = (char *)i386_translate(SS, context.Esp, 1) - vm_inject_state.cbArgs;
+            ss_base = (DWORD)intstack;
+            sp = 4096;
+            dynamic_setWOW32Reserved((PVOID)MAKESEGPTR(intstksel, 4096));
+        }
+        {
+            char *stack = (char *)ss_base + sp - vm_inject_state.cbArgs;
             vm_inject_state.inject = FALSE;
             memcpy(stack, vm_inject_state.pArgs, vm_inject_state.cbArgs);
             /* push return address */
@@ -1615,7 +1632,7 @@ extern "C"
                         {
                             context.Esp = osp + (SIZE_T)stack - (SIZE_T)stack1 - 4;
                             off = ooo - context.Esp;
-                            context.Ebp = bp;
+                            context.Ebp = (context.Ebp & ~0xffff) | bp;
                             context.Eip = ip19;
                             context.SegCs = cs16;
                         }
@@ -1883,6 +1900,7 @@ extern "C"
 #endif
                     fprintf(stderr, "\t%s\n", buffer);
 #if !defined(TRACE_REGS)
+                        DWORD stkptr = m_sreg[SS].base + (m_sreg[SS].d ? REG32(ESP) : REG16(SP));
                         if (SREG(FS) || SREG(GS))
                         {
                             fprintf(stderr,
@@ -1894,7 +1912,7 @@ IP:%04X,stack:%08X,\
 EFLAGS:%08X\
 \n",
 REG32(EAX), REG32(ECX), REG32(EDX), REG32(EBX), REG32(ESP), REG32(EBP), REG32(ESI), REG32(EDI),
-SREG(ES), SREG(CS), SREG(SS), SREG(DS), SREG(FS), SREG(GS), m_eip, read_dword(SREG_BASE(SS) + REG32(ESP)), m_eflags);
+SREG(ES), SREG(CS), SREG(SS), SREG(DS), SREG(FS), SREG(GS), m_eip, read_dword(stkptr), m_eflags);
                         }
                         else
                         {
@@ -1907,7 +1925,7 @@ IP:%04X,stack:%08X,\
 EFLAGS:%08X\
 \n",
 REG32(EAX), REG32(ECX), REG32(EDX), REG32(EBX), REG32(ESP), REG32(EBP), REG32(ESI), REG32(EDI),
-SREG(ES), SREG(CS), SREG(SS), SREG(DS), m_eip, read_dword(SREG_BASE(SS) + REG32(ESP)), m_eflags);
+SREG(ES), SREG(CS), SREG(SS), SREG(DS), m_eip, read_dword(stkptr), m_eflags);
                         }
 #endif
                 }

@@ -408,8 +408,26 @@ UINT16 WINAPI GetProfileInt16( LPCSTR section, LPCSTR entry, INT16 def_val )
 INT16 WINAPI GetProfileString16( LPCSTR section, LPCSTR entry, LPCSTR def_val,
                                  LPSTR buffer, UINT16 len )
 {
-    return GetPrivateProfileString16( section, entry, def_val,
+    char tmp[256];
+    if (section && entry && !stricmp(section, "devices") && !stricmp(entry, "DefaultPrinter"))
+    {
+        int len = 256;
+        if (GetDefaultPrinterA(tmp, &len))
+            entry = tmp;
+    }
+    INT16 ret = GetPrivateProfileString16( section, entry, def_val,
                                       buffer, len, "win.ini" );
+    if (ret && section && entry && !stricmp(section, "windows") && !stricmp(entry, "device"))
+    {
+        char *comma = strchr(buffer, ',');
+        if (comma && ((comma - buffer) > 32))
+        {
+            strcpy(buffer, "DefaultPrinter");
+            strcpy(buffer + 14, comma);
+        }
+        ret = strlen(buffer);
+    }
+    return ret;
 }
 
 /***********************************************************************
@@ -1376,6 +1394,11 @@ INT16 WINAPI GetPrivateProfileString16( LPCSTR section, LPCSTR entry,
     char filenamebuf[MAX_PATH];
     BOOL overwrite_section = FALSE;
     TRACE("%s %s %s\n", filename, section, entry);
+    if (!section || !filename)
+    {
+        if (buffer && len) buffer[0] = 0;
+        return 0;
+    }
     LPCSTR filename_file = PathFindFileNameA(filename);
     if (entry)
     {
@@ -1432,11 +1455,6 @@ INT16 WINAPI GetPrivateProfileString16( LPCSTR section, LPCSTR entry,
     TRACE("(%s, %s, %s, %p, %u, %s)\n", debugstr_a(section), debugstr_a(entry),
           debugstr_a(def_val), buffer, len, debugstr_a(filename));
 
-    if (!section)
-    {
-        if (buffer && len) buffer[0] = 0;
-        return 0;
-    }
     /* len = 0 means unlimited buffer length (windows bug?) */
     if (!entry && len == 0)
     {
