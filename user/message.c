@@ -1266,6 +1266,27 @@ static ATOM topic32_16(ATOM atom)
     return atom;
 }
 
+static BOOL CALLBACK child_paint(HWND hwnd, LPARAM lparam)
+{
+    if (IsWindowVisible(hwnd))
+    {
+        HWND parent = hwnd;
+        RECT crect;
+        GetWindowRect(hwnd, &crect);
+        while (parent = GetAncestor(parent, GA_PARENT))
+        {
+            RECT prect, irect;
+            GetWindowRect(parent, &prect);
+            if (!IntersectRect(&irect, &prect, &crect))
+            {
+                RedrawWindow(hwnd, NULL, NULL, RDW_INTERNALPAINT);
+                break;
+            }
+        }
+    }
+    return TRUE;
+}
+
 /**********************************************************************
  *	     WINPROC_CallProc16To32A
  */
@@ -1509,7 +1530,7 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
             cds.dwData = cds16->dwData;
             cds.cbData = cds16->cbData;
             cds.lpData = MapSL(cds16->lpData);
-            ret = callback( hwnd32, msg, wParam, (LPARAM)&cds, result, arg );
+            ret = callback( hwnd32, msg, (WPARAM)HWND_32(wParam), (LPARAM)&cds, result, arg );
         }
         break;
     case WM_GETDLGCODE:
@@ -2138,7 +2159,9 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
                 }
             }
         }
-        /* fall through */
+        ret = callback( HWND_16(hwnd), msg, wParam,
+                        MAKELPARAM( HIWORD(wParam), HIWORD(wParam) & MF_SYSMENU ? (HMENU16)HMENU_16((HMENU)lParam) : 0 ), result, arg );
+        break;
     case WM_MENUCHAR:
         ret = callback( HWND_16(hwnd), msg, wParam,
                         MAKELPARAM( HIWORD(wParam), (HMENU16)HMENU_16((HMENU)lParam) ), result, arg );
@@ -2154,9 +2177,9 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
         ret = callback( HWND_16(hwnd), msg, wParam, HTASK_16( lParam ), result, arg );
         break;
     case WM_PAINT:
-        // force a paint for win30 windows, KB Q80898
-        if ((GetExpWinVer16(GetExePtr(GetCurrentTask())) < 0x30a) && !(GetWindowLongA(hwnd, GWL_STYLE) & WS_CHILD))
-            RedrawWindow(hwnd, NULL, NULL, RDW_INTERNALPAINT | RDW_ALLCHILDREN);
+        // force a paint for hidden win30 windows, KB Q80898
+        if ((GetExpWinVer16(GetExePtr(GetCurrentTask())) < 0x30a) &&  !(GetWindowLongA(hwnd, GWL_STYLE) & WS_CHILD))
+            EnumChildWindows(hwnd, child_paint, NULL);
         if (IsIconic( hwnd ) && GetClassLongPtrW( hwnd, GCLP_HICON ))
             ret = callback( HWND_16(hwnd), WM_PAINTICON, 1, lParam, result, arg );
         else
