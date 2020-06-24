@@ -48,7 +48,7 @@ __declspec(dllimport) HGDIOBJ16 K32HGDIOBJ_16(HGDIOBJ handle);
 __declspec(dllimport) HGDIOBJ K32HGDIOBJ_32(HGDIOBJ16 handle);
 #define HGDIOBJ_32(handle16)    (K32HGDIOBJ_32(handle16))
 #define HGDIOBJ_16(handle32)    (K32HGDIOBJ_16(handle32))
-void WINAPI K32WOWHandle16DestroyHint(HANDLE handle, WOW_HANDLE_TYPE type);
+void WINAPI K32WOWHandle16Destroy(HANDLE handle, WOW_HANDLE_TYPE type);
 static BYTE fix_font_charset(BYTE charset);
 
 struct saved_visrgn
@@ -1926,7 +1926,7 @@ BOOL16 WINAPI DeleteDC16( HDC16 hdc )
             HeapFree( GetProcessHeap(), 0, saved );
         }
         delete_dib_driver(hdc32);
-        K32WOWHandle16DestroyHint(hdc32, WOW_TYPE_HDC /* GDIOBJ */);
+        K32WOWHandle16Destroy(hdc32, WOW_TYPE_HDC /* GDIOBJ */);
         return TRUE;
     }
     else if (!GetObjectType(hdc32))
@@ -1967,7 +1967,7 @@ BOOL16 WINAPI DeleteObject16( HGDIOBJ16 obj )
     }
     if (result)
     {
-        K32WOWHandle16DestroyHint(object, WOW_TYPE_HDC /* GDIOBJ */);
+        K32WOWHandle16Destroy(object, WOW_TYPE_HDC /* GDIOBJ */);
     }
     return result;
 }
@@ -2108,8 +2108,14 @@ INT16 WINAPI GetDeviceCaps16( HDC16 hdc, INT16 cap )
                 ret |= RC_PALETTE;
                 break;
             case NUMCOLORS:
-                ret = 256;
+            {
+                HPALETTE pal = GetCurrentObject(hdc32, OBJ_PAL);
+                if (pal)
+                    ret = GetPaletteEntries(pal, 0, 0, NULL);
+                else
+                    ret = 256;
                 break;
+            }
         }
     }
     else if ((cap == NUMCOLORS) && (ret == -1)) ret = 2048;
@@ -3487,11 +3493,13 @@ BOOL16 WINAPI ExtFloodFill16( HDC16 hdc, INT16 x, INT16 y, COLORREF color,
 }
 
 
+static UINT16 syspaluse = SYSPAL_STATIC;
 /***********************************************************************
  *           SetSystemPaletteUse   (GDI.373)
  */
 UINT16 WINAPI SetSystemPaletteUse16( HDC16 hdc, UINT16 use )
 {
+    syspaluse = use;
     return SetSystemPaletteUse( HDC_32(hdc), use );
 }
 
@@ -3501,7 +3509,10 @@ UINT16 WINAPI SetSystemPaletteUse16( HDC16 hdc, UINT16 use )
  */
 UINT16 WINAPI GetSystemPaletteUse16( HDC16 hdc )
 {
-    return GetSystemPaletteUse( HDC_32(hdc) );
+    UINT16 ret = GetSystemPaletteUse( HDC_32(hdc) );
+    if (!ret && krnl386_get_compat_mode("256color"))
+         ret = syspaluse;
+    return ret;
 }
 
 
