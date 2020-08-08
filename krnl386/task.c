@@ -1460,7 +1460,7 @@ void WINAPI SwitchStackTo16( WORD seg, WORD ptr, WORD top )
 /***********************************************************************
  *           SwitchStackBack   (KERNEL.109)
  */
-void WINAPI SwitchStackBack16( CONTEXT *context )
+void WINAPI SwitchStackBack16( WORD dummy1, WORD dummy2, WORD dummy3, CONTEXT *context )
 {
     STACK16FRAME *oldFrame, *newFrame;
     INSTANCEDATA *pData;
@@ -1896,7 +1896,7 @@ DWORD WINAPI GetAppCompatFlags16( HTASK16 hTask )
 
 const char *env_var_limitation[] =
 {
-    "COMSPEC", "TEMP", "TMP"
+    "COMSPEC", "TEMP", "TMP", "PROCESSOR_ARCHITECTURE"
 };
 static BOOL env_var_limit(const char *v)
 {

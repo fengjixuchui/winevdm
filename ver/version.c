@@ -29,6 +29,7 @@
 
 #include "windef.h"
 #include "wine/winbase16.h"
+#include "winuser.h"
 #include "winver.h"
 #include "lzexpand.h"
 #include "wine/unicode.h"
@@ -507,13 +508,14 @@ DWORD WINAPI GetFileVersionInfoSize16( LPCSTR lpszFileName, LPDWORD lpdwHandle )
 {
     BOOL ret;
     TRACE("(%s, %p)\n", debugstr_a(lpszFileName), lpdwHandle );
-    ret = GetFileVersionInfoSizeA( lpszFileName, lpdwHandle );
+    ret = GetFileResourceSize16( lpszFileName, VS_FILE_INFO, VS_VERSION_INFO, NULL );
     if (!ret)
     {
         char path[MAX_PATH];
         if (findfile( lpszFileName, path, MAX_PATH ))
-            ret = GetFileVersionInfoSizeA( (LPSTR)path, lpdwHandle );
+            ret = GetFileResourceSize16( lpszFileName, VS_FILE_INFO, VS_VERSION_INFO, NULL );
     }
+    *lpdwHandle = NULL;
     return ret;
 }
 
@@ -523,15 +525,16 @@ DWORD WINAPI GetFileVersionInfoSize16( LPCSTR lpszFileName, LPDWORD lpdwHandle )
 DWORD WINAPI GetFileVersionInfo16( LPCSTR lpszFileName, DWORD handle,
                                    DWORD cbBuf, LPVOID lpvData )
 {
-    DWORD ret;
+    DWORD ret, size;
+    char *buf;
     TRACE("(%s, %08x, %d, %p)\n",
                 debugstr_a(lpszFileName), handle, cbBuf, lpvData );
-    ret = GetFileVersionInfoA( lpszFileName, handle, cbBuf, lpvData );
+    ret = GetFileResource16( lpszFileName, VS_FILE_INFO, VS_VERSION_INFO, NULL, cbBuf, lpvData );
     if (!ret)
     {
         char path[MAX_PATH];
-        if (findfile( lpszFileName, path, MAX_PATH ));
-            ret = GetFileVersionInfoA( (LPSTR)path, handle, cbBuf, lpvData );
+        if (findfile( lpszFileName, path, MAX_PATH ))
+            ret = GetFileResource16( lpszFileName, VS_FILE_INFO, VS_VERSION_INFO, NULL, cbBuf, lpvData );
     }
     return ret;
 }

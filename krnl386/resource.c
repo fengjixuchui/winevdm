@@ -1062,8 +1062,6 @@ HGLOBAL16 WINAPI LoadResource16( HMODULE16 hModule, HRSRC16 hRsrc )
             if (pNameInfo->handle)
             {
                 pNameInfo->usage++;
-                if (pNameInfo->flags & NE_SEGFLAGS_DISCARDABLE)
-                    pNameInfo->usage++;
                 pNameInfo->flags |= NE_SEGFLAGS_LOADED;
             }
         }

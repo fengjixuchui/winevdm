@@ -438,6 +438,12 @@ INT16 WINAPI GetProfileString16( LPCSTR section, LPCSTR entry, LPCSTR def_val,
         }
         ret = strlen(buffer);
     }
+    else if (ret && !PathIsRelativeA(buffer) && PathFileExistsA(buffer))
+    {
+        int cnt = GetShortPathNameA(buffer, tmp, len <= 256 ? len : 256);
+        if (cnt)
+            strcpy(buffer, tmp);
+    }
     return ret;
 }
 
@@ -597,6 +603,12 @@ static HANDLE create_file_OF( LPCWSTR path, INT mode )
  *           OpenFile   (KERNEL.74)
  *           OpenFileEx (KERNEL.360)
  */
+HFILE16 WINAPI WIN16_OpenFile16( LPCSTR name, SEGPTR ofs, UINT16 mode )
+{
+    CURRENT_STACK16->es = SELECTOROF(ofs);
+    return OpenFile16(name, MapSL(ofs), mode);
+}
+
 HFILE16 WINAPI OpenFile16( LPCSTR name, OFSTRUCT *ofs, UINT16 mode )
 {
     HFILE hFileRet;
@@ -610,6 +622,7 @@ HFILE16 WINAPI OpenFile16( LPCSTR name, OFSTRUCT *ofs, UINT16 mode )
     LPWSTR namew;
     const WCHAR *p, *filename;
     CHAR buf[OFS_MAXPATHNAME];
+    CHAR redir[MAX_PATH];
     BOOL result;
     oem.Buffer = ofs->szPathName;
     oem.Length = 0;
@@ -636,6 +649,7 @@ HFILE16 WINAPI OpenFile16( LPCSTR name, OFSTRUCT *ofs, UINT16 mode )
           ((mode & OF_EXIST )==OF_EXIST)?"OF_EXIST ":"",
           ((mode & OF_REOPEN )==OF_REOPEN)?"OF_REOPEN ":""
         );
+    name = RedirectSystemDir(name, redir, MAX_PATH);
 
     if ((mode & (OF_CREATE | OF_SHARE_EXCLUSIVE)) == (OF_CREATE | OF_SHARE_EXCLUSIVE))
     {

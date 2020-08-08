@@ -74,7 +74,7 @@
 71  pascal -ret16 DeleteAtom(word) DeleteAtom16
 72  pascal -ret16 GetAtomName(word ptr word) GetAtomName16
 73  pascal -ret16 GetAtomHandle(word) GetAtomHandle16
-74  pascal -ret16 OpenFile(str ptr word) OpenFile16
+74  pascal -ret16 OpenFile(str long word) WIN16_OpenFile16
 75  stub OpenPathName
 76  stub DeletePathName
 # Reserved*: old Win 2.x functions now moved to USER (Win 3.0+)
@@ -110,7 +110,7 @@
 106 pascal SetSwapAreaSize(word) SetSwapAreaSize16
 107 pascal -ret16 SetErrorMode(word) SetErrorMode16
 108 pascal -ret16 SwitchStackTo(word word word) SwitchStackTo16 # STO in W2.0
-109 pascal -register SwitchStackBack() SwitchStackBack16 # SBACK in W2.0
+109 pascal -register SwitchStackBack(word word word) SwitchStackBack16 # SBACK in W2.0
 110 pascal   PatchCodeHandle(word) PatchCodeHandle16
 111 pascal   GlobalWire(word) GlobalWire16
 112 pascal -ret16 GlobalUnWire(word) GlobalUnWire16
@@ -791,7 +791,8 @@
 @ stdcall -arch=win32 TaskGetCSIP16(long)
 @ stdcall -arch=win32 TaskSwitch16(long long)
 @ stdcall -arch=win32 AllocDStoCSAlias16(long)
-@ cdecl -arch=win32 GLOBAL_GetOrig(long)
-@ cdecl -arch=win32 GLOBAL_SetOrig(long long)
+@ cdecl -arch=win32 GLOBAL_GetLink(long)
+@ cdecl -arch=win32 GLOBAL_SetLink(long long)
+@ cdecl -arch=win32 GLOBAL_FindLink(long)
 @ stdcall -arch=win32 set_vm_inject_cb(long)
 @ stdcall -arch=win32 vm_inject(long long long long long)
