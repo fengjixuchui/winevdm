@@ -35,6 +35,8 @@
 #include "../krnl386/kernel16_private.h"
 #include "commctrl.h"
 #include "wine/exception.h"
+#include <shellapi.h>
+#include <shlobj.h>
 
 /*
 unknwon combobox message
@@ -71,6 +73,7 @@ BOOL is_win_menu_disallowed(DWORD style);
 DWORD USER16_AlertableWait = 0;
 static UINT aviwnd_msg = 0;
 static void *aviwnd_cwp;
+static ATOM dialogmsgthunk;
 
 struct wow_handlers32 wow_handlers32;
 #define TIMER32_LPARAM 0x42137460
@@ -289,7 +292,7 @@ static void init_dummy_proc()
     if (!dummy_proc_allocated)
     {
         dummy_proc = HeapAlloc(GetProcessHeap(), 0xcc, MAX_WINPROCS32 * 2);
-        memset(dummy_proc, 0xc3, MAX_WINPROCS32 * 2);
+        memset(dummy_proc, 0xf4, MAX_WINPROCS32 * 2);
         dummy_proc_allocated = TRUE;
         LDT_ENTRY dummy;
         wine_ldt_set_base(&dummy, dummy_proc);
@@ -467,7 +470,7 @@ DWORD call_native_wndproc_context(CONTEXT *context)
     context.SegFs = wine_get_fs();
     context.SegGs = wine_get_gs();
     context.Eax = !hwnd ? 0 : GetWindowWord16(hwnd, GWLP_HINSTANCE) | 1; /* Handle To Sel */
-    if (!context.Eax) context.Eax = context.SegDs;
+    if (!context.Eax || (func == GetDlgProc16(hwnd))) context.Eax = context.SegDs;
     context.Ebx = 6;
     context.Esi = hwnd;
     context.SegCs = SELECTOROF(func);
@@ -1297,6 +1300,134 @@ static BOOL CALLBACK child_paint(HWND hwnd, LPARAM lparam)
     return TRUE;
 }
 
+#include <pshpack1.h>
+typedef struct {     /* structure for dropped files */
+    WORD     wSize;
+    POINT16  ptMousePos;
+    BOOL16   fInNonClientArea;
+    /* memory block with filenames follows */
+} DROPFILESTRUCT16, *LPDROPFILESTRUCT16;
+#include <poppack.h>
+
+static HDROP16 hdrop32_to_hdrop16(HDROP hdrop32)
+{
+    LPDROPFILES files = (LPDROPFILES)GlobalLock(hdrop32);
+    int size16 = sizeof(DROPFILESTRUCT16);
+    HDROP16 hdrop16;
+    LPDROPFILESTRUCT16 files16;
+    LPSTR filenames16;
+    if (!files)
+        return (HDROP16)hdrop32;
+    if (!files->fWide)
+    {
+        LPSTR filenames = (LPSTR)((LPBYTE)files + files->pFiles);
+        while (TRUE)
+        {
+            size_t len = strlen(filenames) + 1;
+            size16 += len;
+            filenames += len;
+            if (len == 1)
+                break;
+        }
+    }
+    else
+    {
+        LPWSTR filenames = (LPWSTR)((LPBYTE)files + files->pFiles);
+        while (TRUE)
+        {
+            size_t len = wcslen(filenames) + 1;
+            size16 += WideCharToMultiByte(CP_ACP, NULL, filenames, len, NULL, 0, NULL, NULL);
+            filenames += len;
+            if (len == 1)
+                break;
+        }
+    }
+    hdrop16 = (HDROP16)GlobalAlloc16(0, size16);
+    files16 = GlobalLock16(hdrop16);
+    files16->wSize = sizeof(*files16);
+    files16->ptMousePos.x = files->pt.x;
+    files16->ptMousePos.y = files->pt.y;
+    files16->fInNonClientArea = files->fNC;
+    filenames16 = (LPSTR)((LPBYTE)files16 + files16->wSize);
+    if (!files->fWide)
+    {
+        LPSTR filenames = (LPSTR)((LPBYTE)files + files->pFiles);
+        while (TRUE)
+        {
+            size_t len = strlen(filenames) + 1;
+            memcpy(filenames16, filenames, len);
+            filenames16 += len;
+            filenames += len;
+            if (len == 1)
+                break;
+        }
+    }
+    else
+    {
+        int remain_bytes = size16 - sizeof(*files16);
+        LPWSTR filenames = (LPWSTR)((LPBYTE)files + files->pFiles);
+        while (TRUE)
+        {
+            size_t len = wcslen(filenames) + 1;
+            int mblen = WideCharToMultiByte(CP_ACP, NULL, filenames, len, filenames16, remain_bytes, NULL, NULL);
+            remain_bytes -= mblen;
+            filenames16 += mblen;
+            filenames += len;
+            if (len == 1)
+                break;
+        }
+    }
+    GlobalUnlock16(hdrop16);
+    GlobalUnlock(files);
+    DragFinish(hdrop32);
+    return hdrop16;
+}
+
+static HDROP hdrop16_to_hdrop32(HDROP16 hdrop16)
+{
+    return (HDROP)hdrop16;
+/* win32 doesnt process WM_DROPFILES */
+#if false
+    LPDROPFILESTRUCT16 files16 = (LPDROPFILESTRUCT16)GlobalLock16(hdrop16);
+    int size32 = sizeof(DROPFILES);
+    LPSTR filenames;
+    LPDROPFILES files32;
+    HDROP hdrop32;
+    LPSTR filenames32;
+    if (!files16)
+        return NULL;
+    filenames = (LPSTR)((LPBYTE)files16 + files16->wSize);
+    while (TRUE)
+    {
+        size_t len = strlen(filenames);
+        filenames += len + 1;
+        size32 += len + 1;
+        if (len == 0)
+            break;
+    }
+    hdrop32 = (HDROP)GlobalAlloc(0, size32);
+    files32 = (LPDROPFILES)GlobalLock(hdrop32);
+    files32->fWide = FALSE;
+    files32->fNC = files16->fInNonClientArea;
+    files32->pt.x = files16->ptMousePos.x;
+    files32->pt.y = files16->ptMousePos.y;
+    files32->pFiles = sizeof(*files32);
+    filenames32 = (LPSTR)((LPBYTE)files32 + files32->pFiles);
+    filenames = (LPSTR)((LPBYTE)files16 + files16->wSize);
+    while (TRUE)
+    {
+        size_t len = strlen(filenames);
+        memcpy(filenames32, filenames, len + 1);
+        filenames += len + 1;
+        filenames32 += len + 1;
+        if (len == 0)
+            break;
+    }
+    GlobalUnlock16(files16);
+    return hdrop32;
+#endif
+}
+
 /**********************************************************************
  *	     WINPROC_CallProc16To32A
  */
@@ -1792,6 +1923,9 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
     case WM_PAINT:
         ret = callback(hwnd32, msg, (WPARAM)HDC_32(wParam), lParam, result, arg);
         break;
+    case WM_DROPFILES:
+        ret = callback(hwnd32, msg, (WPARAM)hdrop16_to_hdrop32((HDROP16)wParam), lParam, result, arg);
+        break;
     default:
     {
         if (msg != WM_NULL && msg == drag_list_message)
@@ -2172,9 +2306,17 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
                 }
             }
         }
-        ret = callback( HWND_16(hwnd), msg, wParam,
-                        MAKELPARAM( HIWORD(wParam), HIWORD(wParam) & MF_SYSMENU ? (HMENU16)HMENU_16((HMENU)lParam) : 0 ), result, arg );
-        break;
+        else if(lParam == GetMenu(hwnd))
+        {
+            switch(LOWORD(wParam) & 0xfff0)
+            {
+                case SC_MINIMIZE:
+                case SC_RESTORE:
+                case SC_CLOSE:
+                    wParam |= MF_SYSMENU << 16;
+                    break;
+            }
+        }
     case WM_MENUCHAR:
         ret = callback( HWND_16(hwnd), msg, wParam,
                         MAKELPARAM( HIWORD(wParam), (HMENU16)HMENU_16((HMENU)lParam) ), result, arg );
@@ -2600,6 +2742,9 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
             ret = callback( HWND_16(hwnd), msg, wParam, lParam, result, arg );
         break;
     }
+    case WM_DROPFILES:
+        ret = callback(HWND_16(hwnd), msg, (WPARAM16)hdrop32_to_hdrop16((HDROP)wParam), lParam, result, arg);
+        break;
     default:
     {
         if (msg != WM_NULL && msg == drag_list_message)
@@ -2639,6 +2784,51 @@ static LRESULT send_message_timeout_callback( HWND hwnd, UINT msg, WPARAM wp, LP
     }
     return *result;
 }
+
+typedef struct
+{
+    DWORD magic;
+    LRESULT *result;
+    HANDLE event;
+} send_message_callback_args;
+
+void CALLBACK send_message_callback_cb(HWND hwnd, UINT msg, ULONG_PTR param, LRESULT res)
+{
+    send_message_callback_args *args = (send_message_callback_args *)param;
+    if (args->magic != 0xBEEFBEEF)
+        return;
+    *args->result = res;
+    SetEvent(args->event);
+}
+
+static LRESULT send_message_callback_callback( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                      LRESULT *result, void *arg )
+{
+    send_message_callback_args args;
+    args.result = result;
+    args.event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    args.magic = 0xBEEFBEEF;
+    BOOL ret = SendMessageCallbackA(hwnd, msg, wp, lp, send_message_callback_cb, &args);
+    if (ret)
+    {
+        DWORD count;
+        ReleaseThunkLock(&count);
+        DWORD timeout = GetTickCount() + 1000;
+        do
+        {
+            MSG msg;
+            DWORD ret = MsgWaitForMultipleObjects(1, &args.event, FALSE, timeout - GetTickCount(), QS_ALLINPUT);
+            if (ret != (WAIT_OBJECT_0 + 1))
+                break;
+            PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+        } while(GetTickCount() < timeout);
+        RestoreThunkLock(count);
+    }
+    args.magic = 0;
+    CloseHandle(args.event);
+    return TRUE;
+}
+
 typedef struct
 {
     UINT msg;
@@ -2710,16 +2900,17 @@ LRESULT WINAPI SendMessage16( HWND16 hwnd16, UINT16 msg, WPARAM16 wparam, LPARAM
 {
     LRESULT result;
     HWND hwnd = WIN_Handle32( hwnd16 );
+    DWORD pid;
+    DWORD thid = GetWindowThreadProcessId(hwnd, &pid);
     // work around for Borland Office 2.0 installer
-    if ((msg != WM_GETTEXT) || (GetWindowThreadProcessId(hwnd, NULL) != GetCurrentThreadId()))
-        SetEvent(kernel_get_thread_data()->idle_event);
+//    if ((msg != WM_GETTEXT) || (thid != GetCurrentThreadId()))
+//        SetEvent(kernel_get_thread_data()->idle_event);
 
     // SendMessageTimeout always fails with this message
     if (msg == WM_DDE_EXECUTE)
        return PostMessage16( hwnd16, msg, wparam, lparam );
 
-    if (hwnd != HWND_BROADCAST &&
-        GetWindowThreadProcessId( hwnd, NULL ) == GetCurrentThreadId())
+    if (hwnd != HWND_BROADCAST && thid == GetCurrentThreadId())
     {
         /* call 16-bit window proc directly */
         WNDPROC16 winproc;
@@ -2761,7 +2952,10 @@ LRESULT WINAPI SendMessage16( HWND16 hwnd16, UINT16 msg, WPARAM16 wparam, LPARAM
                 return result;
         }
         TRACE_(message)("(0x%04x) to 32-bit [%04x] wp=%04x lp=%08lx\n", hwnd16, msg, wparam, lparam);
-        WINPROC_CallProc16To32A( send_message_timeout_callback, hwnd16, msg, wparam, lparam, &result, NULL );
+        if (pid == GetCurrentProcessId())
+            WINPROC_CallProc16To32A( send_message_callback_callback, hwnd16, msg, wparam, lparam, &result, NULL );
+        else
+            WINPROC_CallProc16To32A( send_message_timeout_callback, hwnd16, msg, wparam, lparam, &result, NULL );
         TRACE_(message)("(0x%04x) to 32-bit [%04x] wp=%04x lp=%08lx returned %08lx\n",
             hwnd16, msg, wparam, lparam, result);
     }
@@ -2865,6 +3059,12 @@ BOOL16 WINAPI PeekMessage32_16( MSG32_16 *msg16, HWND16 hwnd16,
     if(USER16_AlertableWait)
         MsgWaitForMultipleObjectsEx( 0, NULL, 0, 0, MWMO_ALERTABLE );
     if (!PeekMessageA( &msg, hwnd, first, last, flags )) return FALSE;
+
+    if ((flags & PM_REMOVE) && !msg.hwnd && (msg.message == WM_TIMER))
+    {
+        DispatchMessageA(&msg);
+        return PeekMessage32_16(msg16, hwnd16, first, last, flags, wHaveParamHigh);
+    }
 
     if (atom_UserAdapterWindowClass == 0)
     {
@@ -2996,7 +3196,11 @@ BOOL16 WINAPI PeekMessage16( MSG16 *msg, HWND16 hwnd,
         MsgWaitForMultipleObjects(0, NULL, FALSE, 0, QS_ALLINPUT);
         /* Sleep(1); /* yield thread */
         /* Some programs use PeekMessage instead of GetMessage, so use 100% CPU... */
-        /* MsgWaitForMultipleObjects(0, NULL, FALSE, 10, QS_ALLINPUT); /**/
+        static int extra_sleep = -1;
+        if (extra_sleep == -1)
+            extra_sleep = krnl386_get_config_int("otvdm", "PeekMessageSleep", 0);
+        if (extra_sleep > 0)
+            MsgWaitForMultipleObjects(0, NULL, FALSE, extra_sleep, QS_ALLINPUT);
     }
     BOOL ret = PeekMessage32_16((MSG32_16 *)msg, hwnd, first, last, flags, FALSE);
     if (!(flags & PM_NOYIELD))
@@ -3209,10 +3413,12 @@ static LRESULT is_dialog_message_callback(HWND hwnd, UINT msg, WPARAM wp, LPARAM
 /***********************************************************************
  *		IsDialogMessage (USER.90)
  */
-BOOL16 WINAPI IsDialogMessage16( HWND16 hwndDlg, MSG16 *msg16 )
+BOOL16 WINAPI IsDialogMessage16( HWND16 hwndDlg, SEGPTR pmsg16 )
 {
     MSG msg;
+    MSG16 *msg16 = MapSL(pmsg16);
     HWND hwndDlg32;
+    BOOL ret;
 
     msg.hwnd  = WIN_Handle32(msg16->hwnd);
     hwndDlg32 = WIN_Handle32(hwndDlg);
@@ -3228,11 +3434,17 @@ BOOL16 WINAPI IsDialogMessage16( HWND16 hwndDlg, MSG16 *msg16 )
         msg.time    = msg16->time;
         msg.pt.x    = msg16->pt.x;
         msg.pt.y    = msg16->pt.y;
-        return IsDialogMessageA( hwndDlg32, &msg );
+        SetPropA(msg.hwnd, MAKEINTATOM(dialogmsgthunk), (HANDLE)pmsg16);
+        ret = IsDialogMessageA( hwndDlg32, &msg );
+        RemovePropA(msg.hwnd, MAKEINTATOM(dialogmsgthunk));
+        return ret;
     default:
     {
         LPARAM result;
-        return WINPROC_CallProc16To32A(is_dialog_message_callback, hwndDlg, msg16->message, msg16->wParam, msg16->lParam, &result, msg16);
+        SetPropA(msg.hwnd, MAKEINTATOM(dialogmsgthunk), (HANDLE)pmsg16);
+        ret = WINPROC_CallProc16To32A(is_dialog_message_callback, hwndDlg, msg16->message, msg16->wParam, msg16->lParam, &result, msg16);
+        RemovePropA(msg.hwnd, MAKEINTATOM(dialogmsgthunk));
+        return ret;
     }
     }
 
@@ -4629,6 +4841,7 @@ BOOL WINAPI DllMain(
     LPVOID lpvReserved
 )
 {
+
     if (fdwReason == DLL_PROCESS_ATTACH)
     {
         window_type_table = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 65536);
@@ -4640,10 +4853,12 @@ BOOL WINAPI DllMain(
         drag_list_message = RegisterWindowMessage(DRAGLISTMSGSTRING);
         separate_taskbar = krnl386_get_config_int("otvdm", "SeparateTaskbar", SEPARATE_TASKBAR_SEPARATE);
         ShellDDEInit(TRUE);
+        dialogmsgthunk = GlobalAddAtomA("dialogmsgthunk");
     }
     if (fdwReason == DLL_PROCESS_DETACH)
     {
         ShellDDEInit(FALSE);
+        GlobalDeleteAtom(dialogmsgthunk);
     }
     return TRUE;
 }

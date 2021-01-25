@@ -2114,14 +2114,8 @@ INT16 WINAPI GetDeviceCaps16( HDC16 hdc, INT16 cap )
                 ret |= RC_PALETTE;
                 break;
             case NUMCOLORS:
-            {
-                HPALETTE pal = GetCurrentObject(hdc32, OBJ_PAL);
-                if (pal)
-                    ret = GetPaletteEntries(pal, 0, 0, NULL);
-                else
-                    ret = 256;
+                ret = 20;
                 break;
-            }
         }
     }
     else if ((cap == NUMCOLORS) && (ret == -1)) ret = 2048;
@@ -2352,7 +2346,15 @@ DWORD WINAPI GetTextExtent16( HDC16 hdc, LPCSTR str, INT16 count )
 {
     SIZE size;
     HDC hdc32 = HDC_32(hdc);
-    if (!GetTextExtentPoint32A( hdc32, str, count, &size )) return 0;
+    __TRY
+    {
+        if (!GetTextExtentPoint32A( hdc32, str, count, &size )) return 0;
+    }
+    __EXCEPT_ALL
+    {
+        return 0;
+    }
+    __ENDTRY
     check_font_rotation( hdc32, &size ); 
     return MAKELONG( size.cx, size.cy );
 }
@@ -3464,7 +3466,7 @@ void WINAPI AnimatePalette16( HPALETTE16 hpalette, UINT16 StartIndex,
             {
                 HWND hwnd = HWND_32(hwlist[i]);
                 InvalidateRect(hwnd, NULL, FALSE);
-                UpdateWindow(hwnd);
+                //UpdateWindow(hwnd);
             }
         }
     }

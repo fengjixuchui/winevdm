@@ -877,15 +877,27 @@ HFILE16 WINAPI _lcreat16( LPCSTR path, INT16 attr )
 
 /***********************************************************************
  *           _llseek   (KERNEL.84)
- *
- * FIXME:
- *   Seeking before the start of the file should be allowed for _llseek16,
- *   but cause subsequent I/O operations to fail (cf. interrupt list)
- *
  */
 LONG WINAPI _llseek16( HFILE16 hFile, LONG lOffset, INT16 nOrigin )
 {
-    return SetFilePointer( DosFileHandleToWin32Handle(hFile), lOffset, NULL, nOrigin );
+    HANDLE fd = DosFileHandleToWin32Handle(hFile);
+    LONG high = 0;
+    DWORD offset = (DWORD)lOffset;
+    switch (nOrigin)
+    {
+        case FILE_BEGIN:
+            break;
+        case FILE_END:
+            offset += GetFileSize(fd, NULL);
+            break;
+        case FILE_CURRENT:
+            offset += SetFilePointer(fd, 0, NULL, FILE_CURRENT);
+            break;
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return -1;
+    }
+    return SetFilePointer(fd, offset, &high, FILE_BEGIN);
 }
 
 
@@ -925,6 +937,20 @@ LONG WINAPI WIN16_hread( HFILE16 hFile, SEGPTR buffer, LONG count )
     LONG maxlen;
 
     TRACE("%d %08x %d\n", hFile, (DWORD)buffer, count );
+
+    /* Some programs pass a count larger than the allocated buffer */
+    maxlen = GetSelectorLimit16( SELECTOROF(buffer) ) - OFFSETOF(buffer) + 1;
+    if (count > maxlen)
+    {
+        LPVOID temp_buffer = HeapAlloc(GetProcessHeap(), 0, count);
+        HFILE result = _lread((HFILE)DosFileHandleToWin32Handle(hFile), temp_buffer, count );
+        if (result != HFILE_ERROR)
+        {
+            memcpy(MapSL(buffer), temp_buffer, (size_t)result);
+        }
+        HeapFree(GetProcessHeap(), 0, temp_buffer);
+        return result;
+    }
 
     return _lread((HFILE)DosFileHandleToWin32Handle(hFile), MapSL(buffer), count );
 }

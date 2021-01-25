@@ -978,6 +978,7 @@ extern "C"
     typedef VOID (WINAPI *GetpWin16Lock_t)(SYSLEVEL **lock);
     GetpWin16Lock_t pGetpWin16Lock;
     SYSLEVEL *win16_syslevel;
+    HANDLE *vm_idle_event;
     typedef BOOL(WINAPI *WOWCallback16Ex_t)(DWORD vpfn16, DWORD dwFlags,
         DWORD cbArgs, LPVOID pArgs, LPDWORD pdwRetCode);
     WOWCallback16Ex_t pWOWCallback16Ex;
@@ -1009,6 +1010,8 @@ extern "C"
         pGetpWin16Lock = (GetpWin16Lock_t)GetProcAddress(krnl386, "GetpWin16Lock");
         pGetpWin16Lock(&win16_syslevel);
         pWOWCallback16Ex = (WOWCallback16Ex_t)GetProcAddress(krnl386, "K32WOWCallback16Ex");
+        HANDLE *(WINAPI *get_idle_event)() = (HANDLE *(WINAPI *)())GetProcAddress(krnl386, "get_idle_event");
+        vm_idle_event = get_idle_event();
         //SetConsoleCtrlHandler(dump, TRUE);
 		AddVectoredExceptionHandler(TRUE, vm86_vectored_exception_handler);
 		WORD sel = SELECTOR_AllocBlock(iret, 256, WINE_LDT_FLAGS_CODE);
@@ -1364,6 +1367,7 @@ extern "C"
         DWORD cbArgs, LPVOID pArgs, LPDWORD pdwRetCode)
     {
         assert(dwFlags == WCB16_PASCAL);
+try_again:
         if (TryEnterCriticalSection(&win16_syslevel->crst))
         {
             /* There are no threads running VM. (e.g. call GetMessage) */
@@ -1391,7 +1395,13 @@ extern "C"
             ResetEvent(inject_event);
         }
         LeaveCriticalSection(&inject_crit_section);
-        WaitForSingleObject(inject_event, INFINITE);
+        HANDLE objs[2] = { inject_event, vm_idle_event };
+        DWORD ret = WaitForMultipleObjects(2, objs, FALSE, INFINITE);
+        if (ret == (WAIT_OBJECT_0 + 1))
+        {
+            SetEvent(inject_event);
+            goto try_again;
+        }
         return TRUE;
     }
     void vm_inject_call(SEGPTR ret_addr, PEXCEPTION_HANDLER handler,
@@ -1483,7 +1493,7 @@ extern "C"
 			SREG(ES) = (WORD)context->SegEs;
 			SREG(CS) = (WORD)context->SegCs;
 			SREG(SS) = (WORD)context->SegSs;
-			SREG(DS) = (WORD)context->SegDs;
+			SREG(DS) = wine_ldt_copy.flags[(WORD)context->SegDs >> 3] & WINE_LDT_FLAGS_ALLOCATED ? (WORD)context->SegDs : 0;
             /* Some programs expect that gs is not a valid selector! */
             /* Some programs expect that fs is not a valid selector! */
             SREG(FS) = (WORD)context->SegFs == reg_fs ? 0 : context->SegFs;
@@ -2081,7 +2091,7 @@ ES:%04X,CS:%04X,SS:%04X,DS:%04X,FS:%04X,GS:%04X\n\
 IP:%04X, address:%08X\n\
 EFLAGS:%08X\
 \n\n%s\n", rec->ExceptionAddress, (void*)rec->ExceptionInformation[1],
-REG32(EAX), REG32(ECX), REG32(EDX), REG32(EBX), REG32(ESP), REG16(BP), REG16(SI), REG16(DI),
+REG32(EAX), REG32(ECX), REG32(EDX), REG32(EBX), REG32(ESP), REG32(EBP), REG32(ESI), REG32(EDI),
 SREG(ES), SREG(CS), SREG(SS), SREG(DS), SREG(FS), SREG(GS), m_eip, m_pc, m_eflags, buf_pre);
         dump_all_modules();
         dump_stack_trace();

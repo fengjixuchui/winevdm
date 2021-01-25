@@ -116,7 +116,7 @@ HRESULT WINAPI OleInitialize16(SEGPTR pMalloc)
 /******************************************************************************
  *		OleUninitialize	(OLE2.3)
  */
-void WINAPI OleUninitialize16(void)
+HRESULT WINAPI OleUninitialize16(void)
 {
     HMODULE comp = GetModuleHandleA("compobj.dll16");
     HRESULT ret;
@@ -126,6 +126,7 @@ void WINAPI OleUninitialize16(void)
     }
     ((void(WINAPI*)())GetProcAddress(comp, "CoUninitialize16"))();
     OleUninitialize();
+    return 0;
 }
 
 /***********************************************************************
@@ -1183,5 +1184,21 @@ HRESULT WINAPI GetClassFile16(LPCSTR lpszFileName, LPCLSID pclsid)
     lpwszFileName = strdupAtoW(lpszFileName);
     result = GetClassFile(lpwszFileName, pclsid);
     HeapFree(GetProcessHeap(), 0, lpwszFileName);
+    return hresult32_16(result);
+}
+
+HRESULT WINAPI OleCreateLinkToFile16(LPCSTR lpszFileName, REFIID riid, DWORD renderopt, LPFORMATETC16 pFormatetc, SEGPTR pClientSite, SEGPTR pStg, SEGPTR *ppvObj)
+{
+    HRESULT result;
+    LPCOLESTR lpwszFileName;
+    FORMATETC formatetc32;
+    void *pvObj = NULL;
+    TRACE("(%s,%s,%d,%p,%08x,%08x,%p)\n", debugstr_a(lpszFileName), debugstr_guid(riid), renderopt, pFormatetc, pClientSite, pStg, ppvObj);
+    lpwszFileName = strdupAtoW(lpszFileName);
+    if (pFormatetc)
+        map_formatetc16_32(&formatetc32, pFormatetc);
+    result = OleCreateLinkToFile(lpwszFileName, riid, renderopt, pFormatetc ? &formatetc32 : NULL, iface16_32(&IID_IOleClientSite, pClientSite), iface16_32(&IID_IStorage, pStg), &pvObj);
+    HeapFree(GetProcessHeap(), 0, lpwszFileName);
+    *ppvObj = iface32_16(riid, pvObj);
     return hresult32_16(result);
 }
