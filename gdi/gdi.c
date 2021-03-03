@@ -61,6 +61,7 @@ struct saved_visrgn
 static struct list saved_regions = LIST_INIT( saved_regions );
 
 static HPALETTE16 hPrimaryPalette;
+static HGDIOBJ16 stock[STOCK_LAST + 1] = {0};
 
 void WINAPI DibMapGlobalMemory(WORD sel, void *base, DWORD size);
 void WINAPI DibUnmapGlobalMemory(void *base, DWORD size);
@@ -1952,6 +1953,8 @@ BOOL16 WINAPI DeleteObject16( HGDIOBJ16 obj )
         haxmvm_DeleteObject = (BOOL(*)(HGDIOBJ))GetProcAddress(haxmvm, "haxmvm_DeleteObject");
         init = TRUE;
     }
+    for (int i = 0; i <= STOCK_LAST; i++)
+        if (obj == stock[i]) return TRUE;
     if (type == OBJ_BITMAP) free_segptr_bits( obj );
     else if ((type == OBJ_PAL) && GetPtr16(object, 1))
     {
@@ -2279,7 +2282,10 @@ HGDIOBJ16 WINAPI GetStockObject16( INT16 obj )
 {
     if (IsOldWindowsTask(GetCurrentTask()) && !(get_aflags(GetExePtr(GetCurrentTask())) & NE_AFLAGS_WIN2_PROTMODE) && (obj == SYSTEM_FONT))
         obj = SYSTEM_FIXED_FONT;
-    return HGDIOBJ_16( GetStockObject( obj ) );
+    HGDIOBJ16 ret = HGDIOBJ_16( GetStockObject( obj ) );
+    if (ret && (obj <= STOCK_LAST))
+        stock[obj] = ret;
+    return ret;
 }
 
 
@@ -2494,7 +2500,12 @@ INT16 WINAPI SelectVisRgn16( HDC16 hdc, HRGN16 hrgn )
  */
 LONG WINAPI SetBitmapBits16( HBITMAP16 hbitmap, LONG count, LPCVOID buffer )
 {
-    return SetBitmapBits( HBITMAP_32(hbitmap), count, buffer );
+    HBITMAP hbmp32 = HBITMAP_32(hbitmap);
+    BITMAP bmp;
+    if (GetObject(hbmp32, sizeof(BITMAP), &bmp) != sizeof(BITMAP))
+        return 0;
+    DWORD size = bmp.bmHeight * bmp.bmWidthBytes;
+    return SetBitmapBits( hbmp32, min(size, count), buffer );
 }
 
 #include <pshpack1.h>
@@ -2797,6 +2808,19 @@ HDC16 WINAPI CreateIC16( LPCSTR driver, LPCSTR device, LPCSTR output,
         int len = 256;
         if (GetDefaultPrinterA(tmp, &len))
             device = tmp;
+    }
+    if (initData && (!driver || !stricmp(driver, "winspool")))
+    {
+        DEVMODEA dma = {0};
+        if (!IsValidDevmodeA(initData, initData->dmSize + initData->dmDriverExtra))
+            initData = NULL;
+        else
+        {
+            memcpy(&dma, initData, initData->dmSize);
+            dma.dmSize = sizeof(DEVMODEA);
+            dma.dmDriverExtra = 0;
+            return HDC_16( CreateICA( driver, device, output, &dma ) );
+        }
     }
     return HDC_16( CreateICA( driver, device, output, initData ) );
 }
@@ -3539,7 +3563,13 @@ UINT16 WINAPI GetSystemPaletteEntries16( HDC16 hdc, UINT16 start, UINT16 count,
  */
 HDC16 WINAPI ResetDC16( HDC16 hdc, const DEVMODEA *devmode )
 {
-    return HDC_16( ResetDCA(HDC_32(hdc), devmode) );
+    DEVMODEA dma = {0};
+    if (!IsValidDevmodeA(devmode, devmode->dmSize + devmode->dmDriverExtra))
+        return NULL;
+    memcpy(&dma, devmode, devmode->dmSize);
+    dma.dmSize = sizeof(DEVMODEA);
+    dma.dmDriverExtra = 0;
+    return HDC_16( ResetDCA( HDC_32(hdc), &dma ) );
 }
 
 

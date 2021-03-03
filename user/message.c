@@ -1500,17 +1500,26 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
             CREATESTRUCT16 *cs16 = MapSL(lParam);
             CREATESTRUCTA cs;
             MDICREATESTRUCTA mdi_cs;
-            BOOL mdiclient = GetWindowLongW(hwnd32, GWL_EXSTYLE) & WS_EX_MDICHILD || is_mdiclient(hwnd, hwnd32) || (call_window_proc_callback == callback && is_mdiclient_wndproc(arg));
+            CLIENTCREATESTRUCT c32;
+            BOOL mdichild = GetWindowLongW(hwnd32, GWL_EXSTYLE) & WS_EX_MDICHILD ? TRUE : FALSE;
+            BOOL mdiclient = is_mdiclient(hwnd, hwnd32) || (call_window_proc_callback == callback && is_mdiclient_wndproc(arg));
 
             CREATESTRUCT16to32A( hwnd32, cs16, &cs );
-            if (mdiclient)
+            if (mdichild)
             {
                 MDICREATESTRUCT16 *mdi_cs16 = MapSL(cs16->lpCreateParams);
                 MDICREATESTRUCT16to32A(mdi_cs16, &mdi_cs);
                 cs.lpCreateParams = &mdi_cs;
             }
+            else if (mdiclient)
+            {
+                CLIENTCREATESTRUCT16 *c16 = MapSL(cs16->lpCreateParams);
+                c32.idFirstChild = c16->idFirstChild;
+                c32.hWindowMenu = HMENU_32(c16->hWindowMenu);
+                cs.lpCreateParams = (LPVOID)&c32;
+            }
             ret = callback( hwnd32, msg, wParam, (LPARAM)&cs, result, arg );
-            if (mdiclient)
+            if (mdiclient || mdichild)
                 cs.lpCreateParams = cs16->lpCreateParams;
             CREATESTRUCT32Ato16( hwnd32, &cs, cs16 );
         }
@@ -1531,7 +1540,7 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
             ret = callback( hwnd32, msg, (WPARAM)WIN_Handle32( HIWORD(lParam) ),
                             (LPARAM)WIN_Handle32( LOWORD(lParam) ), result, arg );
         else /* message sent to MDI client */
-            ret = callback( hwnd32, msg, wParam, lParam, result, arg );
+            ret = callback( hwnd32, msg, (WPARAM)WIN_Handle32(wParam), lParam, result, arg );
         break;
     case WM_MDIGETACTIVE:
         {
@@ -1926,6 +1935,14 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
     case WM_DROPFILES:
         ret = callback(hwnd32, msg, (WPARAM)hdrop16_to_hdrop32((HDROP16)wParam), lParam, result, arg);
         break;
+    case WM_SETREDRAW:
+    {
+        BOOL redraw = !(GetWindowLongA(hwnd32, GWL_STYLE) & WS_VISIBLE);
+        ret = callback(hwnd32, msg, wParam, lParam, result, arg);
+        if (redraw)
+            RedrawWindow(hwnd32, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+        break;
+    }
     default:
     {
         if (msg != WM_NULL && msg == drag_list_message)
@@ -2824,6 +2841,8 @@ static LRESULT send_message_callback_callback( HWND hwnd, UINT msg, WPARAM wp, L
         } while(GetTickCount() < timeout);
         RestoreThunkLock(count);
     }
+    else if (GetLastError() == ERROR_MESSAGE_SYNC_ONLY)
+        send_message_timeout_callback(hwnd, msg, wp, lp, result, arg);
     args.magic = 0;
     CloseHandle(args.event);
     return TRUE;
@@ -5018,6 +5037,7 @@ LRESULT CALLBACK WindowProc16(HWND hDlg, UINT Msg, WPARAM wParam, LPARAM lParam)
     if (wndproc16)
     {
         MSG msg = { 0 };
+        CLIENTCREATESTRUCT c32;
         msg.hwnd = hDlg;
         msg.message = Msg;
         msg.wParam = wParam;
@@ -5029,6 +5049,13 @@ LRESULT CALLBACK WindowProc16(HWND hDlg, UINT Msg, WPARAM wParam, LPARAM lParam)
             if (index >= MAX_WINPROCS32)
                 index -= MAX_WINPROCS32;
             WNDPROC wndproc32 = winproc16_array[index];
+            if ((Msg == WM_CREATE) && is_mdiclient(hWnd16, hDlg))
+            {
+                CLIENTCREATESTRUCT16 *c16 = MapSL(*(DWORD *)lParam);
+                c32.idFirstChild = c16->idFirstChild;
+                c32.hWindowMenu = HMENU_32(c16->hWindowMenu);
+                ((CREATESTRUCTA *)lParam)->lpCreateParams = (LPVOID)&c32;
+            }
             return CallWindowProcA(wndproc32, hDlg, Msg, wParam, lParam);
         }
         WINPROC_CallProc32ATo16(call_window_proc16, msg.hwnd, msg.message, msg.wParam, msg.lParam,
@@ -5075,4 +5102,10 @@ void WINAPI window_message16_32(const MSG16 *msg16, MSG *msg32)
     msg32->pt.y = msg16->pt.y;
     msg32->time = msg16->time;
     WINPROC_CallProc16To32A(LPMSG16_32_callback, msg16->hwnd, msg16->message, msg16->wParam, msg16->lParam, &ret, msg32);
+}
+
+BOOL16 WINAPI QuerySendMessage16(HANDLE16 res1, HANDLE16 res2, HANDLE16 res3, MSG16 *msg)
+{
+    WARN("not returning message\n");
+    return InSendMessage();
 }

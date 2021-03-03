@@ -386,18 +386,18 @@ typedef struct {
 /* we then get 0x40 bytes worth of 0xffff or small numbers followed by
    nrOfFileBlks - 2 of these */
 typedef struct {
-	WORD small_no;
 	SLTG_Name index_name; /* This refers to a name in the directory */
 	SLTG_Name other_name; /* Another one of these weird names */
 	WORD res1a;	      /* 0xffff */
 	WORD name_offs;	      /* offset to name in name table */
-	WORD more_bytes;      /* if this is non-zero we get this many
+	WORD hlpstr_len;      /* if this is non-zero we get this many
 				 bytes before the next element, which seem
 				 to reference the docstring of the type ? */
 	WORD res20;	      /* 0xffff */
 	DWORD helpcontext;
 	WORD res26;	      /* 0xffff */
         GUID uuid;
+        WORD typekind;
 } SLTG_OtherTypeInfo;
 
 /* Next we get WORD 0x0003 followed by a DWORD which if we add to
@@ -436,8 +436,7 @@ typedef struct {
 /*12*/  WORD impls_bytes; /* bytes used by implemented type data */
 /*14*/  WORD tdescalias_vt; /* for TKIND_ALIAS */
 /*16*/  WORD res16; /* always ffff */
-/*18*/  WORD res18; /* always 0000 */
-/*1a*/  WORD res1a; /* always 0000 */
+/*18*/  DWORD helpctxtbase; /* base value of member help context */
 /*1c*/  WORD simple_alias; /* tdescalias_vt is a vt rather than an offset? */
 /*1e*/  WORD res1e; /* always 0000 */
 /*20*/  WORD cbSizeInstance;
@@ -495,6 +494,8 @@ typedef struct {
 	WORD rettype;	/* return type VT_?? or offset to ret type */
 	WORD vtblpos;	/* position in vtbl? */
 	WORD funcflags; /* present if magic & 0x20 */
+	WORD res18;	/* flags? this and below only present if magic & 0x10 */
+	WORD helpfile;	/* encoded help file name */
 /* Param list starts, repeat next two as required */
 #if 0
 	WORD  name;	/* offset to 2nd letter of name */
@@ -503,6 +504,7 @@ typedef struct {
 } SLTG_Function;
 
 #define SLTG_FUNCTION_FLAGS_PRESENT 0x20
+#define SLTG_FUNCTION_HELPFILE_PRESENT 0x10
 #define SLTG_FUNCTION_MAGIC 0x4c
 #define SLTG_DISPATCH_FUNCTION_MAGIC 0xcb
 #define SLTG_STATIC_FUNCTION_MAGIC 0x8b
@@ -584,12 +586,14 @@ typedef struct {
   DWORD memid;
   WORD helpcontext; /* ?? */
   WORD helpstring; /* ?? */
-  WORD varflags; /* only present if magic & 0x02 */
+  WORD varflags; /* only present if magic & 0x20 */
+  WORD res14; /* flags? this and below only present if magic & 0x10 */
+  WORD helpfile; /* encoded help file name */
 } SLTG_Variable;
 
 #define SLTG_VAR_MAGIC 0x0a
 #define SLTG_VAR_WITH_FLAGS_MAGIC 0x2a
-#define SLTG_VAR_UNK 0x3a // hidden?
+#define SLTG_VAR_WITH_HELPFILE 0x3a
 
 
 /* CARRAYs look like this
