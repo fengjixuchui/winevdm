@@ -337,7 +337,19 @@ unknown:
     return FALSE;
 }
 
-static void (WINAPI *checkpatch)(NE_MODULE *, int, HANDLE16) = NULL;
+static void notify_load_seg(NE_MODULE *pModule, WORD segnum, SEGTABLEENTRY *pSeg)
+{
+    NFYLOADSEG nf;
+    SEGPTR s = MapLS(&nf);
+    nf.dwSize = sizeof(NFYLOADSEG);
+    nf.wSelector = pSeg->hSeg | 1;
+    nf.wSegNum = segnum;
+    nf.wType = pSeg->flags;
+    nf.wcInstance = 0; /* FIXME */
+    nf.lpstrModuleName = MAKESEGPTR(pModule->self, pModule->ne_restab + 1);
+    TOOLHELP_CallNotify(NFY_LOADSEG, s);
+    UnMapLS(s);
+}
 
 /***********************************************************************
  *           NE_LoadSegment
@@ -438,10 +450,9 @@ BOOL NE_LoadSegment( NE_MODULE *pModule, WORD segnum )
         }
     }
     
-    if ((pModule->ne_expver < 0x300) && checkpatch)
-        checkpatch( pModule, segnum, pSeg->hSeg );
-
     pSeg->flags |= NE_SEGFLAGS_LOADED;
+
+    notify_load_seg(pModule, segnum, pSeg);
 
     /* Perform exported function prolog fixups */
     NE_FixupSegmentPrologs( pModule, segnum );
@@ -472,11 +483,8 @@ BOOL NE_LoadAllSegments( NE_MODULE *pModule )
     int i;
     SEGTABLEENTRY * pSegTable = NE_SEG_TABLE(pModule);
 
-    if ((pModule->ne_expver < 0x300) && !(pModule->ne_flags & NE_FFLAGS_BUILTIN) && !checkpatch)
-    {
+    if ((pModule->ne_expver < 0x300) && !(pModule->ne_flags & NE_FFLAGS_BUILTIN) && !GetModuleHandle16("RMPATCH"))
         LoadLibrary16("RMPATCH.DLL");
-        checkpatch = GetProcAddress(GetModuleHandleA("RMPATCH.DLL16"), "checkpatch");
-    }
 
     if (pModule->ne_flags & NE_FFLAGS_SELFLOAD)
     {
@@ -1050,8 +1058,30 @@ BOOL NE_CreateSegment( NE_MODULE *pModule, int segnum )
         return TRUE;    /* all but DGROUP only allocated once */
 
     minsize = pSeg->minsize ? pSeg->minsize : 0x10000;
-    if ( segnum == pModule->ne_autodata ) minsize += pModule->ne_stack;
-    if ( segnum == pModule->ne_autodata ) minsize += pModule->ne_heap;
+
+    minsize += 2;
+
+    if ( segnum == pModule->ne_autodata )
+    {
+        minsize += pModule->ne_stack;
+        if (pModule->ne_heap > 0 && pModule->ne_heap < 0x800)
+        {
+            if (minsize + 0x800 > 0x10000)
+            {
+                if (pModule->ne_heap < 0x100)
+                {
+                    pModule->ne_heap = 0x100;
+                }
+            }
+            else
+            {
+                pModule->ne_heap = 0x800;
+            }
+        }
+        minsize += pModule->ne_heap;
+        if (!(pModule->ne_flags & NE_FFLAGS_BUILTIN) && minsize >= 0x10000)
+            return FALSE;
+    }
 
     selflags = (pSeg->flags & NE_SEGFLAGS_DATA) ? WINE_LDT_FLAGS_DATA : WINE_LDT_FLAGS_CODE;
     if (pSeg->flags & NE_SEGFLAGS_32BIT) selflags |= WINE_LDT_FLAGS_32BIT;
@@ -1059,18 +1089,6 @@ BOOL NE_CreateSegment( NE_MODULE *pModule, int segnum )
         selflags &= ~WINE_LDT_FLAGS_32BIT;
     pSeg->hSeg = GLOBAL_Alloc( NE_Ne2MemFlags(pSeg->flags), minsize, pModule->self, selflags );
     GLOBAL_SetSeg(pSeg->hSeg, segnum, (pSeg->flags & NE_SEGFLAGS_DATA) ? 2 : 3);
-    {
-        NFYLOADSEG nf;
-        SEGPTR s = MapLS(&nf);
-        nf.dwSize = sizeof(NFYSTARTDLL);
-        nf.wSelector = pSeg->hSeg | 1;
-        nf.wSegNum = segnum;
-        nf.wType = pSeg->flags & NE_SEGFLAGS_DATA;
-        nf.wcInstance = 0; /* FIXME */
-        nf.lpstrModuleName = 0xdeadbeef; /* FIXME */
-        TOOLHELP_CallNotify(NFY_LOADSEG, s);
-        UnMapLS(s);
-    }
     if (!pSeg->hSeg) return FALSE;
 
     pSeg->flags |= NE_SEGFLAGS_ALLOCATED;

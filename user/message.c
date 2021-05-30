@@ -1428,6 +1428,51 @@ static HDROP hdrop16_to_hdrop32(HDROP16 hdrop16)
 #endif
 }
 
+// TODO: check for and fix memory leaks
+HANDLE convert_cb_data_16_32(int format, HANDLE16 data16);
+static void convert_dde_msg_16_to_32(int msg, UINT_PTR handle)
+{
+    void *ptr = (void *)GlobalLock((HGLOBAL)handle);
+    char *data = 0;
+    WORD format;
+    switch (msg)
+    {
+        case WM_DDE_DATA:
+            data = ((DDEDATA *)ptr)->Value;
+            format = ((DDEDATA *)ptr)->cfFormat;
+            break;
+        case WM_DDE_POKE:
+            data = ((DDEPOKE *)ptr)->Value;
+            format = ((DDEPOKE *)ptr)->cfFormat;
+            break;
+    }
+    if (data && (format < 0xc000) && (format != CF_TEXT) && (format != CF_OEMTEXT) && *(HANDLE16 *)data)
+        *(HANDLE *)data = convert_cb_data_16_32(format, *(HANDLE16 *)data);
+    GlobalUnlock((HGLOBAL)handle);
+}
+
+HANDLE16 convert_cb_data_32_16(int format, HANDLE data32);
+static void convert_dde_msg_32_to_16(int msg, HANDLE16 handle)
+{
+    void *ptr = (void *)GlobalLock16(handle);
+    char *data = 0;
+    WORD format;
+    switch (msg)
+    {
+        case WM_DDE_DATA:
+            data = ((DDEDATA *)ptr)->Value;
+            format = ((DDEDATA *)ptr)->cfFormat;
+            break;
+        case WM_DDE_POKE:
+            data = ((DDEPOKE *)ptr)->Value;
+            format = ((DDEPOKE *)ptr)->cfFormat;
+            break;
+    }
+    if (data && (format < 0xc000) && (format != CF_TEXT) && (format != CF_OEMTEXT) && *(HANDLE *)data)
+        *(HANDLE16 *)data = convert_cb_data_32_16(format, *(HANDLE *)data);
+    GlobalUnlock16(handle);
+}
+        
 /**********************************************************************
  *	     WINPROC_CallProc16To32A
  */
@@ -1783,6 +1828,7 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
             HANDLE16 lo16 = LOWORD(lParam);
             UINT_PTR lo32 = 0;
             if (lo16 && !(lo32 = convert_handle_16_to_32(lo16, GMEM_DDESHARE))) break;
+            convert_dde_msg_16_to_32(msg, lo32);
             lParam = PackDDElParam( msg, lo32, topic16_32(HIWORD(lParam)) );
             ret = callback( hwnd32, msg, (WPARAM)WIN_Handle32(wParam), lParam, result, arg );
         }
@@ -1961,6 +2007,28 @@ LRESULT WINPROC_CallProc16To32A( winproc_callback_t callback, HWND16 hwnd, UINT1
     }
     }
     return ret;
+}
+
+static HICON16 get_default_icon(HINSTANCE16 inst)
+{
+    LPBYTE restab;
+    NE_TYPEINFO *type = get_resource_table(inst, RT_GROUP_ICON, &restab);
+    if (!type)
+        type = get_resource_table(inst, RT_ICON, &restab);
+    if (type)
+    {
+        LPCSTR id = (LPCSTR)(((NE_NAMEINFO *)((char *)type + sizeof(NE_TYPEINFO)))->id);
+        char name[32] = {0};
+        if (!((int)id & 0x8000))
+        {
+            LPBYTE pos = restab + (int)id;
+            int len = pos[0] > 31 ? 31 : pos[0];
+            strncpy(name, pos + 1, len);
+            id = name;
+        }
+        return LoadIcon16(inst, id);
+    }
+    return 0;
 }
 
 #include <uxtheme.h>
@@ -2389,7 +2457,8 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
 
             UnpackDDElParam( msg, lParam, &lo32, &hi );
             if (lo32 && !(lo16 = convert_handle_32_to_16(lo32, GMEM_DDESHARE))) break;
-            lo16 = topic32_16(lo16);
+            convert_dde_msg_32_to_16(msg, lo16);
+            hi = topic32_16(hi);
             ret = callback( HWND_16(hwnd), msg, HWND_16((HWND)wParam),
                             MAKELPARAM(lo16, hi), result, arg );
         }
@@ -2662,6 +2731,8 @@ LRESULT WINPROC_CallProc32ATo16( winproc_callback16_t callback, HWND hwnd, UINT 
         break;
     case WM_QUERYDRAGICON:
         ret = callback(HWND_16(hwnd), msg, wParam, lParam, result, arg);
+        if (!*result)
+            *result = get_default_icon(GetWindowWord16(HWND_16(hwnd), GWL_HINSTANCE));
         *result = (LRESULT)get_icon_32((HICON16)*result);
         break;
     case WM_QUERYDROPOBJECT:
@@ -3185,6 +3256,12 @@ LRESULT WINAPI DefWindowProc16( HWND16 hwnd16, UINT16 msg, WPARAM16 wParam, LPAR
 {
     LRESULT result;
     WINPROC_CallProc16To32A(defwindow_proc_callback, hwnd16, msg, wParam, lParam, &result, 0);
+    if ((msg == WM_WINDOWPOSCHANGED) && IsOldWindowsTask(GetCurrentTask()))
+    {
+        WINDOWPOS16 *wpos = (WINDOWPOS16 *)MapSL(lParam);
+        if (wpos->flags & 0x1000 /*SWP_NOCLIENTMOVE*/)
+            SendMessage16(hwnd16, WM_MOVE, 0, MAKELONG(wpos->x, wpos->y));
+    }
     return result;
 }
 

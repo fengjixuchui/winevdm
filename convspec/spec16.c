@@ -768,6 +768,14 @@ static void output_module16( DLLSPEC *spec )
         if (!odp || !is_function( odp )) continue;
         output( ".L__wine_%s_%u:\n", spec->c_name, i );
         output( "\tpushw %%bp\n" );
+        if (odp->flags & FLAG_STKPROLOG)
+        {
+            output( "\tmovw %%sp, %%bp\n" );
+            output( "\tpushw $0x1234\n" );
+            output( "\tpopw %%bp\n" );
+            output( "\tpopw %%bp\n" );
+            output( "\tpushw %%bp\n" );
+        }
         output( "\tpushl $%s\n",
             odp->type == TYPE_PASCAL ? asm_name_stdcall16(odp->link_name, odp) : (odp->type == TYPE_STUB ? get_stub_name(odp, spec) : asm_name( odp->link_name )));
         output( "\tcallw .L__wine_spec_callfrom16_%s\n", get_callfrom16_name( odp ) );
@@ -832,11 +840,15 @@ void output_spec16_file( DLLSPEC *spec16 )
 
     needs_get_pc_thunk = 0;
     output_standard_file_header();
-    output_module( spec32 );
+    //output_module( spec32 );
     output_module16( spec16 );
     output_stubs( spec16 );
-    output_exports( spec32 );
-    output_imports( spec16 );
+    //output_exports( spec32 );
+    //output_imports( spec16 );
+    output( "\n\t%s\n", get_asm_string_section() );
+    output( "%s\n", asm_globl("__wine_spec_file_name") );
+    output( ".L__wine_spec_file_name:\n" );
+    output( "\t%s \"%s\"\n", get_asm_string_keyword(), spec16->file_name );
     if (1||is_undefined( "__wine_call_from_16" )) output_asm_relays16();
     if (needs_get_pc_thunk) output_get_pc_thunk();
     if (spec16->main_module)
@@ -848,6 +860,7 @@ void output_spec16_file( DLLSPEC *spec16 )
     output_gnu_stack_note();
     free_dll_spec( spec32 );
     output("%s:/*?*/\n", asm_name("_end"));
+    flush_output_buffer();
 }
 
 /*******************************************************************

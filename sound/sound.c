@@ -72,13 +72,16 @@ INT16 WINAPI OpenSound16(void)
 {
 
   if (owner) return S_SERDVNA;
-  owner = GetCurrentTask();
 
   const WAVEFORMATEX wfmt = { WAVE_FORMAT_PCM, 1, 48000, 48000, 1, 8, 0 };
   event = CreateEventA(NULL, FALSE, FALSE, NULL);
 
-  if (waveOutOpen(&wohand, WAVE_MAPPER, &wfmt, event, 0, CALLBACK_EVENT) != MMSYSERR_NOERROR) return S_SERDVNA;
-  waveOutSetVolume(wohand, MAKELONG(0x1999, 0x1999)); /* 10% volume */
+  if (waveOutOpen(&wohand, WAVE_MAPPER, &wfmt, event, 0, CALLBACK_EVENT) != MMSYSERR_NOERROR)
+  {
+      CloseHandle(event);
+      return S_SERDVNA;
+  }
+  owner = GetCurrentTask();
   queue = (NOTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 32 * sizeof(NOTE));
   queuelen = 32 * sizeof(NOTE);
   playing = 0;
@@ -100,6 +103,9 @@ void WINAPI CloseSound16(void)
   HeapFree(GetProcessHeap(), 0, (LPVOID)queue);
   waveOutClose(wohand);
   CloseHandle(event);
+  event = NULL;
+  wohand = NULL;
+  queue = NULL;
   playing = 0;
   owner = 0;
 }
@@ -230,7 +236,7 @@ static DWORD WINAPI play(LPVOID param)
     if (notelen)
     {
       int hwavelen = max(1, (int)((1000.0f / ((float)queue[i].freq * mspersamp)) / 2));
-      char samp = 0xff;
+      char samp = 0x99;
       for (int j = 0; j < notelen; j++)
       {
         wavbuf[k + j] = samp;
@@ -280,17 +286,19 @@ INT16 WINAPI WaitSoundState16(INT16 x)
 {
   if (owner != GetCurrentTask()) return 0;
   if (!playing) return 0;
-  if (thread)
+  HANDLE dup;
+  if (DuplicateHandle(GetCurrentProcess(), thread, GetCurrentProcess(), &dup, 0, FALSE, DUPLICATE_SAME_ACCESS))
   {
     BOOL exitcode;
-    GetExitCodeThread(thread, &exitcode);
+    GetExitCodeThread(dup, &exitcode);
     if (exitcode == STILL_ACTIVE)
     {
       DWORD count;
       ReleaseThunkLock(&count);
-      WaitForSingleObject(thread, INFINITE);
+      WaitForSingleObject(dup, INFINITE);
       RestoreThunkLock(count);
     }
+    CloseHandle(dup);
   }
   return 0;
 }

@@ -2522,34 +2522,12 @@ ATOM WINAPI RegisterClassEx16( const WNDCLASSEX16 *wc )
     }
 
     wc32.cbSize        = sizeof(wc32);
-    wc32.style         = wc->style | (IsOldWindowsTask(GetCurrentTask()) || is_reactos() ? CS_GLOBALCLASS : 0);
-    wc32.lpfnWndProc   = WindowProc16;//WINPROC_AllocProc16( wc->lpfnWndProc );
+    wc32.style         = wc->style | CS_GLOBALCLASS;
+    wc32.lpfnWndProc   = WindowProc16;
     wc32.cbClsExtra    = wc->cbClsExtra;
     wc32.cbWndExtra    = 100;
     wc32.hInstance     = HINSTANCE_32(inst);
     wc32.hIcon         = get_icon_32(wc->hIcon);
-    
-    if (!wc32.hIcon)
-    {
-        LPBYTE restab;
-        NE_TYPEINFO *type = get_resource_table(inst, RT_GROUP_ICON, &restab);
-        if (!type)
-            type = get_resource_table(inst, RT_ICON, &restab);
-        if (type)
-        {
-            LPCSTR id = (LPCSTR)(((NE_NAMEINFO *)((char *)type + sizeof(NE_TYPEINFO)))->id);
-            char name[32] = {0};
-            if (!((int)id & 0x8000))
-            {
-                LPBYTE pos = restab + (int)id;
-                int len = pos[0] > 31 ? 31 : pos[0];
-                strncpy(name, pos + 1, len);
-                id = name;
-            }
-            wc32.hIcon = get_icon_32(LoadIcon16(inst, id));
-         }
-    }
-
     wc32.hCursor       = get_icon_32( wc->hCursor );
     wc32.hbrBackground = HBRUSH_32(wc->hbrBackground);
     wc32.lpszMenuName  = MapSL(wc->lpszMenuName);
@@ -2572,10 +2550,10 @@ ATOM WINAPI RegisterClassEx16( const WNDCLASSEX16 *wc )
         wc32.lpszClassName = buf;
     }
     /*
-    register same class:
-    Win3.1 returns 0
-    WOW returns same class atom
-    */
+     * register same class:
+     *   Win3.1 returns 0
+     *   WOW returns same class atom
+     */
     atom = RegisterClassExA( &wc32 );
     TRACE("(%08x,%08x,%04x,%04x,%04x,%04x,%04x,%04x,%s,%s,%04x) Ret:%04x\n", wc->style, wc->lpfnWndProc, wc->cbClsExtra, wc->cbWndExtra, wc->hInstance, wc->hIcon, wc->hCursor, wc->hbrBackground, debugstr_a(wc32.lpszMenuName), debugstr_a(wc32.lpszClassName), wc->hIconSm, atom);
 	if (atom)
@@ -2594,6 +2572,7 @@ ATOM WINAPI RegisterClassEx16( const WNDCLASSEX16 *wc )
         class->inst = inst;
 		class->wndproc16 = WNDCLASS16Info[atom].wndproc;
         class->classInfo = wc32;
+        class->classInfo.style = wc->style | (IsOldWindowsTask(GetCurrentTask()) ? CS_GLOBALCLASS : 0);
         class->classInfo.lpszClassName = (LPBYTE)class + sizeof(*class);
         memcpy(class->classInfo.lpszClassName, a.name, class_len);
         if (menu_len)
@@ -2823,13 +2802,14 @@ BOOL16 WINAPI TrackPopupMenu16( HMENU16 hMenu, UINT16 wFlags, INT16 x, INT16 y,
         r.right  = lpRect->right;
         r.bottom = lpRect->bottom;
     }
-    ret = TrackPopupMenu( HMENU_32(hMenu), wFlags, x, y, nReserved,
+    ret = TrackPopupMenu( HMENU_32(hMenu), wFlags | TPM_RETURNCMD, x, y, nReserved,
                            WIN_Handle32(hwnd), lpRect ? &r : NULL );
-    if (ret)
+    if (ret && !(wFlags & TPM_RETURNCMD))
     {
-        MSG16 msg;
-        if (PeekMessage16(&msg, hwnd, WM_COMMAND, WM_COMMAND, PM_REMOVE | PM_NOYIELD))
-            DispatchMessage16(&msg);
+        if (GetExpWinVer16(GetExePtr(GetCurrentTask())) < 0x30a)
+            SendMessage16(hwnd, WM_COMMAND, ret, 0);
+        else
+            PostMessage16(hwnd, WM_COMMAND, ret, 0);
     }
     return ret;
 }
@@ -3177,7 +3157,7 @@ HWND16 WINAPI CreateWindowEx16( DWORD exStyle, LPCSTR className,
     SetWindowHInst16(hWnd16, instance);
     if (!GetWindowHMenu16(hWnd16))
         SetWindowHMenu16(hWnd16, menu);
-	return hWnd16;
+    return hWnd16;
 }
 void InitWndProc16(HWND hWnd, HWND16 hWnd16)
 {

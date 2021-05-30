@@ -79,6 +79,7 @@ static HINSTANCE16 MODULE_LoadModule16( LPCSTR libname, BOOL implicit, BOOL lib_
 
 static HMODULE16 NE_GetModuleByFilename( LPCSTR name );
 
+BOOL16 WINAPI WIN32_GlobalUnlock16(HGLOBAL16 handle); 
 
 /* patch all the flat cs references of the code segment if necessary */
 static inline void patch_code_segment( NE_MODULE *pModule )
@@ -332,17 +333,17 @@ __declspec(dllexport) void NE_DumpAllModules(void)
         char buffer[1024];
         buffer[0] = '\0';
         char *cbuf = buffer;
-        if (pModule->ne_flags & NE_FFLAGS_SINGLEDATA) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_SINGLEDATA | ");
-        if (pModule->ne_flags & NE_FFLAGS_MULTIPLEDATA) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_MULTIPLEDATA | ");
-        if (pModule->ne_flags & NE_FFLAGS_WIN32) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_WIN32 | ");
-        if (pModule->ne_flags & NE_FFLAGS_BUILTIN) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_BUILTIN | ");
-        if (pModule->ne_flags & NE_FFLAGS_FRAMEBUF) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_FRAMEBUF | ");
-        if (pModule->ne_flags & NE_FFLAGS_CONSOLE) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_CONSOLE | ");
-        if (pModule->ne_flags & NE_FFLAGS_GUI) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_GUI | ");
-        if (pModule->ne_flags & NE_FFLAGS_SELFLOAD) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_SELFLOAD | ");
-        if (pModule->ne_flags & NE_FFLAGS_LINKERROR) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_LINKERROR | ");
-        if (pModule->ne_flags & NE_FFLAGS_CALLWEP) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_CALLWEP | ");
-        if (pModule->ne_flags & NE_FFLAGS_LIBMODULE) cbuf += sprintf(cbuf, "%s", "NE_FFLAGS_LIBMODULE | ");
+        if (pModule->ne_flags & NE_FFLAGS_SINGLEDATA) cbuf += sprintf(cbuf, "%s", "SINGLEDATA | ");
+        if (pModule->ne_flags & NE_FFLAGS_MULTIPLEDATA) cbuf += sprintf(cbuf, "%s", "MULTIPLEDATA | ");
+        if (pModule->ne_flags & NE_FFLAGS_WIN32) cbuf += sprintf(cbuf, "%s", "WIN32 | ");
+        if (pModule->ne_flags & NE_FFLAGS_BUILTIN) cbuf += sprintf(cbuf, "%s", "BUILTIN | ");
+        if (pModule->ne_flags & NE_FFLAGS_FRAMEBUF) cbuf += sprintf(cbuf, "%s", "FRAMEBUF | ");
+        if (pModule->ne_flags & NE_FFLAGS_CONSOLE) cbuf += sprintf(cbuf, "%s", "CONSOLE | ");
+        if (pModule->ne_flags & NE_FFLAGS_GUI) cbuf += sprintf(cbuf, "%s", "GUI | ");
+        if (pModule->ne_flags & NE_FFLAGS_SELFLOAD) cbuf += sprintf(cbuf, "%s", "SELFLOAD | ");
+        if (pModule->ne_flags & NE_FFLAGS_LINKERROR) cbuf += sprintf(cbuf, "%s", "LINKERROR | ");
+        if (pModule->ne_flags & NE_FFLAGS_CALLWEP) cbuf += sprintf(cbuf, "%s", "CALLWEP | ");
+        if (pModule->ne_flags & NE_FFLAGS_LIBMODULE) cbuf += sprintf(cbuf, "%s", "LIBMODULE | ");
         
         if (cbuf != buffer)
         {
@@ -697,9 +698,6 @@ static HMODULE16 build_module( const void *mapping, SIZE_T mapping_size, LPCSTR 
     if (!(pModule->ne_flags & NE_FFLAGS_LIBMODULE) && (pModule->ne_stack < 0x1400))
         pModule->ne_stack = 0x1400;
 
-    if (pModule->ne_heap && (pModule->ne_heap < 0x800))
-        pModule->ne_heap = 0x800;
-
     pModule->self         = hModule;
     pModule->mapping      = mapping;
     pModule->mapping_size = mapping_size;
@@ -738,6 +736,14 @@ static HMODULE16 build_module( const void *mapping, SIZE_T mapping_size, LPCSTR 
     pModule->ne_restab = pData - (BYTE *)pModule;
     if (!NE_READ_DATA( pModule, pData, mz_header->e_lfanew + ne_header->ne_restab,
                        ne_header->ne_modtab - ne_header->ne_restab )) goto failed;
+
+    /* The module name is CAPITALIZED. */
+
+    for (i = 1; i <= *pData; i++)
+    {
+        pData[i] = toupper(pData[i]);
+    }
+
     pData += ne_header->ne_modtab - ne_header->ne_restab;
 
     /* Get the module references table */
@@ -1279,7 +1285,7 @@ static HINSTANCE16 NE_CreateThread( NE_MODULE *pModule, WORD cmdShow, LPCSTR cmd
         }
         if (!(pTask = GlobalLock16( hTask ))) break;
         instance = pTask->hInstance;
-        GlobalUnlock16( hTask );
+        WIN32_GlobalUnlock16( hTask );
     } while (!instance);
 
     CloseHandle( hThread );
@@ -1432,7 +1438,7 @@ HINSTANCE16 WINAPI LoadModule16( LPCSTR name, LPVOID paramBlock )
                 paramBlock32.dwReserved = 0;
                 HANDLE hProcess = 0;
                 DWORD result = LoadModule_wine_implementation(name, &paramBlock32, &hProcess);/* win32 returns 33 */
-                GlobalUnlock16(params->hEnvironment);
+                WIN32_GlobalUnlock16(params->hEnvironment);
                 if (result < 32)
                     return result;
                 char cmdlineBuf[_countof("WINOLDAP.MOD -WoAWoW32XXXXXXXX")];
@@ -1769,13 +1775,7 @@ HMODULE16 WINAPI GetModuleHandle16( LPCSTR name )
         if (pModule->ne_flags & NE_FFLAGS_WIN32) continue;
 
         name_table = (BYTE *)pModule + pModule->ne_restab;
-	/* FIXME: the strncasecmp is WRONG. It should not be case insensitive,
-	 * but case sensitive! (Unfortunately Winword 6 and subdlls have
-	 * lowercased module names, but try to load uppercase DLLs, so this
-	 * 'i' compare is just a quickfix until the loader handles that
-	 * correctly. -MM 990705
-	 */
-        if ((*name_table == len) && !NE_strncasecmp(tmpstr, (const char*)name_table+1, len))
+        if ((*name_table == len) && !strncmp(tmpstr, (const char*)name_table+1, len))
             return hModule;
     }
 
@@ -1954,7 +1954,7 @@ HINSTANCE16 WINAPI WinExec16(LPCSTR lpCmdLine, UINT16 nCmdShow)
             {
                 int pos;
                 HWND16 hwnd;
-                sscanf(harg, "-h%x%n", &hwnd, &pos);
+                sscanf(harg, "-h%hx%n", &hwnd, &pos);
                 memcpy(fixargs, args, (int)(harg - args));
                 sprintf(fixargs + (int)(harg - args), "-h%x%s", HWND_32(hwnd), args + pos);
                 arglen = strlen(fixargs);
@@ -2073,12 +2073,12 @@ HINSTANCE16 WINAPI WinExec16(LPCSTR lpCmdLine, UINT16 nCmdShow)
                     PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE);
                 } while (GetTickCount() < timeout);
                 RestoreThunkLock(count);
-                GlobalUnlock16(curtask);
+                WIN32_GlobalUnlock16(curtask);
                 break;
             }
             TDB *lasttask = curtask;
             curtask = curtdb->hNext;
-            GlobalUnlock16(lasttask);
+            WIN32_GlobalUnlock16(lasttask);
         }
 
     }

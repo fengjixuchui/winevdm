@@ -708,7 +708,15 @@ BOOL16 WINAPI CopyRect16( RECT16 *dest, const RECT16 *src )
  */
 BOOL16 WINAPI IsRectEmpty16( const RECT16 *rect )
 {
-    return ((rect->left >= rect->right) || (rect->top >= rect->bottom));
+    __TRY
+    {
+        return ((rect->left >= rect->right) || (rect->top >= rect->bottom));
+    }
+    __EXCEPT_ALL
+    {
+        return TRUE;
+    }
+    __ENDTRY
 }
 
 
@@ -951,14 +959,9 @@ BOOL16 WINAPI EmptyClipboard16(void)
     return ret;
 }
 
-
-/**************************************************************************
- *		SetClipboardData (USER.141)
- */
-HANDLE16 WINAPI SetClipboardData16( UINT16 format, HANDLE16 data16 )
+HANDLE convert_cb_data_16_32(int format, HANDLE16 data16)
 {
     HANDLE data32 = 0;
-
     switch (format)
     {
     case CF_BITMAP:
@@ -1012,24 +1015,24 @@ HANDLE16 WINAPI SetClipboardData16( UINT16 format, HANDLE16 data16 )
         }
         break;
     }
-
-    if (!SetClipboardData( format, data32 )) return 0;
-    return data16;
+    return data32;
 }
 
 
 /**************************************************************************
- *		GetClipboardData (USER.142)
+ *		SetClipboardData (USER.141)
  */
-HANDLE16 WINAPI GetClipboardData16( UINT16 format )
+HANDLE16 WINAPI SetClipboardData16( UINT16 format, HANDLE16 data16 )
 {
-    HANDLE data32 = GetClipboardData( format );
-    HANDLE16 data16 = 0;
+    if (!SetClipboardData( format, convert_cb_data_16_32(format, data16) )) return 0;
+    return data16;
+}
+
+HANDLE16 convert_cb_data_32_16(int format, HANDLE data32)
+{
     UINT size;
+    HANDLE16 data16 = 0;
     void *ptr;
-
-    if (!data32) return 0;
-
     switch (format)
     {
     case CF_BITMAP:
@@ -1085,6 +1088,18 @@ HANDLE16 WINAPI GetClipboardData16( UINT16 format )
         break;
     }
     return data16;
+}
+    
+
+/**************************************************************************
+ *		GetClipboardData (USER.142)
+ */
+HANDLE16 WINAPI GetClipboardData16( UINT16 format )
+{
+    HANDLE data32 = GetClipboardData( format );
+
+    if (!data32) return 0;
+    return convert_cb_data_32_16(format, data32);
 }
 
 
@@ -1292,6 +1307,7 @@ BOOL16 WINAPI WinHelp16( HWND16 hWnd, LPCSTR lpHelpFile, UINT16 wCommand,
         case HELP_PARTIALKEY:
         case HELP_COMMAND:
         case HELP_SETWINPOS:
+        case HELP_MULTIKEY:
             dwData = (DWORD)MapSL(dwData);
             break;
         default:
@@ -1423,6 +1439,11 @@ HACCEL16 WINAPI LoadAccelerators16(HINSTANCE16 instance, LPCSTR lpTableName)
                 table[i].fVirt = table16[i].fVirt & 0x7f;
                 table[i].key   = table16[i].key;
                 table[i].cmd   = table16[i].cmd;
+                if (table16[i].fVirt & 0x80)
+                {
+                    count = i + 1;
+                    break;
+                }
             }
             ret = CreateAcceleratorTableA( table, count );
             HeapFree( GetProcessHeap(), 0, table );

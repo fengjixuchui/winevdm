@@ -1485,12 +1485,69 @@ INT16 WINAPI SelectClipRgn16( HDC16 hdc, HRGN16 hrgn )
 }
 
 
+/*
+ * Prevent the GDI object selected by DC from being deleted.
+ * GDI32 fails to delete selected objects as documented, but sometimes it seems
+ * to be able to delete it.
+ * GetCurrentObject returns the selected object, but it is unreliable
+ * because sometimes it returns zero. (metafile DC?)
+ */
+
+struct hdc_selected_object
+{
+    struct list entry;
+    HDC hdc;
+    HGDIOBJ selected_objects[GDI_OBJ_LAST + 1];
+};
+
+static struct list hdc_selected_objects = LIST_INIT(hdc_selected_objects);
+
+void delete_dc_entry(HDC hdc32)
+{
+    struct hdc_selected_object *dc, *next;
+    LIST_FOR_EACH_ENTRY_SAFE(dc, next, &hdc_selected_objects, struct hdc_selected_object, entry)
+    {
+        if (dc->hdc == hdc32)
+        {
+            list_remove(&dc->entry);
+            HeapFree(GetProcessHeap(), 0, dc);
+        }
+    }
+}
+
 /***********************************************************************
  *           SelectObject    (GDI.45)
  */
 HGDIOBJ16 WINAPI SelectObject16( HDC16 hdc, HGDIOBJ16 handle )
 {
-    return HGDIOBJ_16( SelectObject( HDC_32(hdc), HGDIOBJ_32(handle) ) );
+    HDC hdc32 = HDC_32(hdc);
+    HGDIOBJ handle32 = HGDIOBJ_32(handle);
+    struct hdc_selected_object *entry, *dc = NULL;
+    HGDIOBJ result = SelectObject( hdc32, handle32 );
+    DWORD type = GetObjectType(handle32);
+    DWORD dc_type = GetObjectType(hdc32);
+    if (dc_type)
+    {
+        LIST_FOR_EACH_ENTRY(entry, &hdc_selected_objects, struct hdc_selected_object, entry)
+        {
+            if (entry->hdc == hdc32)
+            {
+                dc = entry;
+                break;
+            }
+        }
+        if (!dc)
+        {
+            dc = (struct hdc_selected_object*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(struct hdc_selected_object));
+            dc->hdc = hdc32;
+            list_add_head(&hdc_selected_objects, &dc->entry);
+        }
+        if (type >= 1 && type <= GDI_OBJ_LAST)
+        {
+            dc->selected_objects[type] = handle32;
+        }
+    }
+    return HGDIOBJ_16( result );
 }
 
 
@@ -1554,6 +1611,9 @@ HBRUSH16 WINAPI CreateBrushIndirect16( const LOGBRUSH16 * brush )
 
     if (brush->lbStyle == BS_DIBPATTERN || brush->lbStyle == BS_DIBPATTERN8X8)
         return CreateDIBPatternBrush16( brush->lbHatch, brush->lbColor );
+
+    if (brush->lbStyle == BS_NULL)
+        return GetStockObject16(NULL_BRUSH);
 
     brush32.lbStyle = brush->lbStyle;
     brush32.lbColor = brush->lbColor;
@@ -1764,6 +1824,8 @@ HFONT16 WINAPI CreateFontIndirect16( const LOGFONT16 *plf16 )
     {
         LOGFONTA lfA;
         logfont_16_to_A( plf16, &lfA );
+        if (lfA.lfCharSet == 0xfe)
+            lfA.lfCharSet = 0xfd;
         ret = CreateFontIndirectA( &lfA );
         TRACE("(%d, %d, %04X, %04X, %04X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %s) = %04X\n", plf16->lfHeight, plf16->lfWidth, plf16->lfEscapement, plf16->lfOrientation, plf16->lfWeight
             , plf16->lfItalic, plf16->lfUnderline, plf16->lfStrikeOut, plf16->lfCharSet, plf16->lfOutPrecision, plf16->lfClipPrecision
@@ -1826,6 +1888,9 @@ HPEN16 WINAPI CreatePen16( INT16 style, INT16 width, COLORREF color )
 {
     LOGPEN logpen;
 
+    if (style == PS_NULL)
+        return GetStockObject16(NULL_PEN);
+
     logpen.lopnStyle = style;
     logpen.lopnWidth.x = width;
     logpen.lopnWidth.y = 0;
@@ -1841,6 +1906,9 @@ HPEN16 WINAPI CreatePenIndirect16( const LOGPEN16 * pen )
 {
     LOGPEN logpen;
 
+    if (pen->lopnStyle == PS_NULL)
+        return GetStockObject16(NULL_PEN);
+    
     if (pen->lopnStyle > PS_INSIDEFRAME) return 0;
     logpen.lopnStyle   = pen->lopnStyle;
     logpen.lopnWidth.x = pen->lopnWidth.x;
@@ -1926,6 +1994,7 @@ BOOL16 WINAPI DeleteDC16( HDC16 hdc )
             DeleteObject( saved->hrgn );
             HeapFree( GetProcessHeap(), 0, saved );
         }
+        delete_dc_entry(hdc32);
         delete_dib_driver(hdc32);
         K32WOWHandle16Destroy(hdc32, WOW_TYPE_HDC /* GDIOBJ */);
         return TRUE;
@@ -1947,11 +2016,29 @@ BOOL16 WINAPI DeleteObject16( HGDIOBJ16 obj )
     int type = GetObjectType(object);
     static BOOL (*haxmvm_DeleteObject)(HGDIOBJ);
     static BOOL init;
+    struct hdc_selected_object *dc, *next;
     if (!init)
     {
         HMODULE haxmvm = GetModuleHandleW(L"haxmvm");
         haxmvm_DeleteObject = (BOOL(*)(HGDIOBJ))GetProcAddress(haxmvm, "haxmvm_DeleteObject");
         init = TRUE;
+    }
+    LIST_FOR_EACH_ENTRY_SAFE(dc, next, &hdc_selected_objects, struct hdc_selected_object, entry)
+    {
+        if (type >= 1 && type <= GDI_OBJ_LAST)
+        {
+            HGDIOBJ selected = GetCurrentObject(dc->hdc, type);
+            if ((selected && object == selected) || (!selected && dc->selected_objects[type] == object))
+            {
+                if (!GetObjectType(dc->hdc))
+                {
+                    delete_dc_entry(dc);
+                    continue;
+                }
+                TRACE("GDIOBJ %p(%04x) is selected by DC %p\n", object, obj, dc->hdc);
+                return TRUE;
+            }
+        }
     }
     for (int i = 0; i <= STOCK_LAST; i++)
         if (obj == stock[i]) return TRUE;
@@ -1969,7 +2056,7 @@ BOOL16 WINAPI DeleteObject16( HGDIOBJ16 obj )
     {
         result = DeleteObject( object );
     }
-    if (result)
+    if (GetObjectType(object) != 0 && result)
     {
         K32WOWHandle16Destroy(object, WOW_TYPE_HDC /* GDIOBJ */);
     }
@@ -2320,7 +2407,7 @@ COLORREF WINAPI GetTextColor16( HDC16 hdc )
 // but ignores the absolute angles
 // Windows XP is mostly the same but calculates the full extent when the relative angle is 0
 // Windows 3.1 returns the full extent but rounds the relative angle down to 0, 90, 180 or 270 degrees
-void check_font_rotation(HDC hdc, SIZE *box)
+static void check_font_rotation(HDC hdc, SIZE16 *box)
 {
     if (LOWORD(LOBYTE(GetVersion())) >= 0x6)
     {
@@ -2350,18 +2437,16 @@ void check_font_rotation(HDC hdc, SIZE *box)
  */
 DWORD WINAPI GetTextExtent16( HDC16 hdc, LPCSTR str, INT16 count )
 {
-    SIZE size;
-    HDC hdc32 = HDC_32(hdc);
+    SIZE16 size;
     __TRY
     {
-        if (!GetTextExtentPoint32A( hdc32, str, count, &size )) return 0;
+        if (!GetTextExtentPoint16( hdc, str, count, &size )) return 0;
     }
     __EXCEPT_ALL
     {
         return 0;
     }
     __ENDTRY
-    check_font_rotation( hdc32, &size ); 
     return MAKELONG( size.cx, size.cy );
 }
 
@@ -2504,6 +2589,25 @@ LONG WINAPI SetBitmapBits16( HBITMAP16 hbitmap, LONG count, LPCVOID buffer )
     BITMAP bmp;
     if (GetObject(hbmp32, sizeof(BITMAP), &bmp) != sizeof(BITMAP))
         return 0;
+    if (krnl386_get_compat_mode("256color") && (bmp.bmBitsPixel > 8))
+    {
+        HDC dc = CreateCompatibleDC(NULL);
+        BITMAPINFO *bmap = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 256*2 + sizeof(BITMAPINFOHEADER));
+        UINT16 *colors = (UINT16 *)bmap->bmiColors;
+        VOID *section;
+        bmap->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmap->bmiHeader.biWidth = bmp.bmWidth;
+        bmap->bmiHeader.biHeight = -(count / bmp.bmWidth);
+        bmap->bmiHeader.biPlanes = 1;
+        bmap->bmiHeader.biBitCount = 8;
+        for (int i = 0; i < 256; i++)
+            colors[i] = i;
+        int ret = SetDIBits(dc, hbmp32, 0, bmap->bmiHeader.biHeight, buffer, bmap, DIB_PAL_COLORS);
+        HeapFree(GetProcessHeap(), 0, bmap);
+        DeleteDC(dc);
+        return ret * bmp.bmWidth;
+    }
+
     DWORD size = bmp.bmHeight * bmp.bmWidthBytes;
     return SetBitmapBits( hbmp32, min(size, count), buffer );
 }
@@ -2643,6 +2747,8 @@ INT16 WINAPI AddFontResource16( LPCSTR filename )
             fnt->fi.dfBitsOffset = hdrsize;
             fnt->fi.dfFace = hdrsize + nbitsize;
             fnt->dfSize = fnt->fi.dfFace + namelen + 1;
+            if (fnt->fi.dfCharSet == 0xfe) // pagemaker fonts have charset 0xfe which windows 10 treats as utf-8
+                fnt->fi.dfCharSet = 0xfd;	
             int fnum;
             if (AddFontMemResourceEx(dst, fnt->dfSize, 0, &fnum))
             {
@@ -3356,6 +3462,9 @@ DWORD WINAPI SetMapperFlags16( HDC16 hdc, DWORD flags )
 BOOL16 WINAPI GetCharWidth16( HDC16 hdc, UINT16 firstChar, UINT16 lastChar, LPINT16 buffer )
 {
     BOOL retVal = FALSE;
+    TEXTMETRIC tm = {0};
+    HDC hdc32 = HDC_32(hdc);
+    GetTextMetricsA(hdc32, &tm);
 
     if( firstChar != lastChar )
     {
@@ -3365,10 +3474,10 @@ BOOL16 WINAPI GetCharWidth16( HDC16 hdc, UINT16 firstChar, UINT16 lastChar, LPIN
             LPINT obuf32 = buf32;
             UINT i;
 
-            retVal = GetCharWidth32A( HDC_32(hdc), firstChar, lastChar, buf32);
+            retVal = GetCharWidth32A( hdc32, firstChar, lastChar, buf32);
             if (retVal)
             {
-                for (i = firstChar; i <= lastChar; i++) *buffer++ = *buf32++;
+                for (i = firstChar; i <= lastChar; i++) *buffer++ = (*buf32++) + tm.tmOverhang;
             }
             HeapFree(GetProcessHeap(), 0, obuf32);
         }
@@ -3376,8 +3485,8 @@ BOOL16 WINAPI GetCharWidth16( HDC16 hdc, UINT16 firstChar, UINT16 lastChar, LPIN
     else /* happens quite often to warrant a special treatment */
     {
         INT chWidth;
-        retVal = GetCharWidth32A( HDC_32(hdc), firstChar, lastChar, &chWidth );
-        *buffer = chWidth;
+        retVal = GetCharWidth32A( hdc32, firstChar, lastChar, &chWidth );
+        *buffer = chWidth + tm.tmOverhang;
     }
     return retVal;
 }
@@ -4113,13 +4222,15 @@ BOOL16 WINAPI GetTextExtentPoint16( HDC16 hdc, LPCSTR str, INT16 count, LPSIZE16
 {
     SIZE size32;
     HDC hdc32 = HDC_32(hdc);
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc32, &tm);
     BOOL ret = GetTextExtentPoint32A( hdc32, str, count, &size32 );
 
     if (ret)
     {
-        check_font_rotation( hdc32, &size32 ); 
-        size->cx = size32.cx;
+        size->cx = size32.cx + tm.tmOverhang;
         size->cy = size32.cy;
+        check_font_rotation( hdc32, size ); 
     }
     return ret;
 }

@@ -173,6 +173,7 @@ struct strarray
 #define FLAG_REGISTER  0x10  /* use register calling convention */
 #define FLAG_PRIVATE   0x20  /* function is private (cannot be imported) */
 #define FLAG_ORDINAL   0x40  /* function should be imported by ordinal */
+#define FLAG_STKPROLOG 0x80  /* add stack adjust prolog for programs that hook exports */
 
 #define FLAG_FORWARD   0x100  /* function is a forwarded name */
 #define FLAG_EXT_LINK  0x200  /* function links to an external symbol */
@@ -298,6 +299,7 @@ extern void output_bin_resources( DLLSPEC *spec, unsigned int start_rva );
 extern void output_fake_module( DLLSPEC *spec );
 extern void output_def_file( DLLSPEC *spec, int include_private );
 extern void load_res16_file( const char *name, DLLSPEC *spec );
+extern void load_res16_from_buf( const unsigned char *buf, int size, DLLSPEC *spec );
 extern void output_res16_data( DLLSPEC *spec );
 extern void output_bin_res16_data( DLLSPEC *spec );
 extern void output_res16_directory( DLLSPEC *spec );

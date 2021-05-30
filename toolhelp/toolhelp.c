@@ -372,24 +372,25 @@ BOOL16 WINAPI ModuleNext16( MODULEENTRY *lpme )
 /**********************************************************************
  *	    ModuleFindName    (TOOLHELP.61)
  */
-BOOL16 WINAPI ModuleFindName16( MODULEENTRY *lpme, LPCSTR name )
+HMODULE16 WINAPI ModuleFindName16( MODULEENTRY *lpme, LPCSTR name )
 {
-    lpme->wNext = GetModuleHandle16( name );
-    return ModuleNext16( lpme );
+    HMODULE16 hModule = GetModuleHandle16( name );
+    lpme->wNext = hModule;
+    return ModuleNext16( lpme ) ? hModule : 0;
 }
 
 
 /**********************************************************************
  *	    ModuleFindHandle    (TOOLHELP.62)
  */
-BOOL16 WINAPI ModuleFindHandle16( MODULEENTRY *lpme, HMODULE16 hModule )
+HMODULE16 WINAPI ModuleFindHandle16( MODULEENTRY *lpme, HMODULE16 hModule )
 {
     NE_MODULE *pModule;
-    if (!(pModule = GlobalLock16(hModule))) return FALSE;
+    if (!(pModule = GlobalLock16(hModule))) return 0;
     if (pModule->ne_magic != IMAGE_OS2_SIGNATURE)
-        return FALSE;
+        return 0;
     lpme->wNext = hModule;
-    return ModuleNext16( lpme );
+    return ModuleNext16( lpme ) ? hModule : 0;
 }
 
 
@@ -498,7 +499,7 @@ BOOL16 WINAPI NotifyRegister16( HTASK16 htask, FARPROC16 lpfnCallback,
 {
     int	i;
 
-    FIXME("(%x,%x,%x), semi-stub.\n",
+    WARN("(%x,%x,%x), semi-stub.\n",
                       htask, (DWORD)lpfnCallback, wFlags );
     if (!htask) htask = GetCurrentTask();
     for (i=0;i<nrofnotifys;i++)
@@ -527,7 +528,7 @@ BOOL16 WINAPI NotifyUnRegister16( HTASK16 htask )
 {
     int	i;
 
-    FIXME("(%x), semi-stub.\n", htask );
+    WARN("(%x), semi-stub.\n", htask );
     if (!htask) htask = GetCurrentTask();
     for (i=nrofnotifys;i--;)
         if (notifys[i].htask==htask)
@@ -553,7 +554,7 @@ void WINAPI next_intcb(CONTEXT *context)
         context->Esp += 12;
         context->Eip = stkptr[3];
         context->SegCs = stkptr[4];
-        context->ContextFlags = stkptr[5];
+        context->EFlags = stkptr[5];
         lastaddr = MAKESEGPTR(context->SegCs, context->Eip);
         return;
     }
@@ -598,7 +599,7 @@ BOOL16 WINAPI InterruptRegister16( HTASK16 htask, FARPROC16 callback )
 {
     int	i;
 
-    FIXME("(%04x, %04x:%04x), semi-stub.\n", htask, SELECTOROF(callback), OFFSETOF(callback));
+    WARN("(%04x, %04x:%04x), semi-stub.\n", htask, SELECTOROF(callback), OFFSETOF(callback));
     if (!htask) htask = GetCurrentTask();
     for (i=0;i<nrofintcbs;i++)
         if (intcbs[i].htask==htask)
@@ -625,7 +626,7 @@ BOOL16 WINAPI InterruptUnRegister16( HTASK16 htask )
 {
     int	i;
 
-    FIXME("(%x), semi-stub.\n", htask );
+    WARN("(%x), semi-stub.\n", htask );
     if (!htask) htask = GetCurrentTask();
     for (i=nrofintcbs;i--;)
         if (intcbs[i].htask==htask)

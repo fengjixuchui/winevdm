@@ -49,7 +49,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(ole);
 
-#define E_INVALIDARG16 MAKE_SCODE(SEVERITY_ERROR, FACILITY_NULL, 3)
+static SEGPTR taskmem_strdupWtoA(LPCWSTR str);
 
 static HICON convert_icon_to_32( HICON16 icon16 )
 {
@@ -84,8 +84,8 @@ BOOL WINAPI Ole2_LibMain(DWORD fdwReason, HINSTANCE hinstDLL, WORD ds,
 }
 int WINAPI Ole2_WEP(HINSTANCE16 hInstance, WORD wDataSeg, WORD cbHeapSize, LPSTR lpCmdLine)
 {
-    FreeLibrary16("STORAGE.DLL");
-    FreeLibrary16("COMPOBJ.DLL");
+    FreeLibrary16(GetModuleHandle16("STORAGE"));
+    FreeLibrary16(GetModuleHandle16("COMPOBJ"));
     return TRUE;
 }
 /******************************************************************************
@@ -116,17 +116,16 @@ HRESULT WINAPI OleInitialize16(SEGPTR pMalloc)
 /******************************************************************************
  *		OleUninitialize	(OLE2.3)
  */
-HRESULT WINAPI OleUninitialize16(void)
+void WINAPI OleUninitialize16(void)
 {
     HMODULE comp = GetModuleHandleA("compobj.dll16");
-    HRESULT ret;
     if (!comp)
     {
         comp = LoadLibraryA("compobj.dll16");
     }
     ((void(WINAPI*)())GetProcAddress(comp, "CoUninitialize16"))();
     OleUninitialize();
-    return 0;
+    return;
 }
 
 /***********************************************************************
@@ -246,11 +245,11 @@ HRESULT WINAPI CreateItemMoniker16(LPCOLESTR16 lpszDelim,LPCOLESTR16 lpszItem,SE
  *  hOleMenu  FIXME: Should probably be an HOLEMENU16.
  */
 HRESULT WINAPI OleSetMenuDescriptor16(
-    HOLEMENU               hOleMenu,
+    HOLEMENU16             hOleMenu,
     HWND16                 hwndFrame,
     HWND16                 hwndActiveObject,
-    LPOLEINPLACEFRAME        lpFrame,
-    LPOLEINPLACEACTIVEOBJECT lpActiveObject)
+ /* LPOLEINPLACEFRAME */ SEGPTR lpFrame,
+ /* LPOLEINPLACEACTIVEOBJECT */ SEGPTR lpActiveObject)
 {
     HOLEMENU hOleMenu32;
     TRACE("(%p, %x, %x, %p, %p)\n", hOleMenu, hwndFrame, hwndActiveObject, lpFrame, lpActiveObject);
@@ -550,7 +549,7 @@ HRESULT WINAPI WriteClassStg16(/*IStorage **/SEGPTR stg, REFCLSID clsid)
     return hresult32_16(WriteClassStg((IStorage*)iface16_32(&IID_IStorage, stg), clsid));
 }
 
-HRESULT WINAPI DoDragDrop16(LPDATAOBJECT pDataObj, LPDROPSOURCE pDropSource, DWORD dwOKEffects, LPDWORD pdwEffect)
+HRESULT WINAPI DoDragDrop16(/* LPDATAOBJECT16 */SEGPTR pDataObj, /* LPDROPSOURCE16 */SEGPTR pDropSource, DWORD dwOKEffects, LPDWORD pdwEffect)
 {
     HRESULT result;
     DWORD count;
@@ -572,12 +571,12 @@ HRESULT WINAPI ReadFmtUserTypeStg16(/*LPSTORAGE16*/SEGPTR pstg, CLIPFORMAT *pcf,
     LPOLESTR lpszUserType = NULL;
     HRESULT result;
     TRACE("(%p,%p,%p)\n", pstg, pcf, lplpszUserType);
-    result = hresult32_16(ReadFmtUserTypeStg((IStorage*)iface16_32(&IID_IStorage, pstg), pcf, lplpszUserType ? lpszUserType : NULL));
+    result = hresult32_16(ReadFmtUserTypeStg((IStorage*)iface16_32(&IID_IStorage, pstg), pcf, lplpszUserType ? &lpszUserType : NULL));
     if (lplpszUserType)
     {
-        LPOLESTR16 a = strdupWtoA(lpszUserType);
-        TRACE("%s\n", a);
-        *lplpszUserType = MapLS(a);
+        SEGPTR a = taskmem_strdupWtoA(lpszUserType);
+        TRACE("%s\n", MapSL(a));
+        *lplpszUserType = a;
         CoTaskMemFree(lpszUserType);
     }
     if (!SUCCEEDED(result))
@@ -708,7 +707,7 @@ HRESULT WINAPI OleGetAutoConvert16(REFCLSID clsidOld, LPCLSID pclsidNew)
 HRESULT WINAPI OleSetAutoConvert16(REFCLSID clsidOld, REFCLSID clsidNew)
 {
     HRESULT result;
-    TRACE("(%s,%s)\n", debugstr_a(clsidOld), debugstr_a(clsidNew));
+    TRACE("(%s,%s)\n", debugstr_guid(clsidOld), debugstr_guid(clsidNew));
     result = OleSetAutoConvert(clsidOld, clsidNew);
     if (result == REGDB_E_WRITEREGDB)
     {
@@ -744,7 +743,6 @@ HRESULT WINAPI OleCreate16(REFCLSID rclsid, REFIID riid, DWORD renderopt, LPFORM
 HANDLE16 WINAPI OleDuplicateData16(HANDLE16 hSrc, CLIPFORMAT cfFormat, UINT16 uiFlags)
 {
     HGLOBAL16 hDst;
-    LPVOID pDst;
     DWORD size;
     TRACE("(%04x,%04x,%04x)\n", hSrc, cfFormat, uiFlags);
     if (cfFormat == CF_BITMAP)
@@ -810,11 +808,11 @@ HRESULT WINAPI OleTranslateAccelerator16(SEGPTR lpFrame, LPOLEINPLACEFRAMEINFO16
 {
     MSG msg32;
     HRESULT result;
-    IOleInPlaceFrame *lpFrame32 = (IOleInPlaceFrame*)iface16_32(&IID_IOleInPlaceFrame, lpFrameInfo);
+    IOleInPlaceFrame *lpFrame32 = (IOleInPlaceFrame*)iface16_32(&IID_IOleInPlaceFrame, lpFrame);
     OLEINPLACEFRAMEINFO frameInfo32;
     void WINAPI window_message16_32(const MSG16 *msg16, MSG *msg32);
     TRACE("(%08x,%p,%p)\n", lpFrame, lpFrameInfo, lpmsg16);
-    map_oleinplaceframeinfo16_32(&lpFrame32, lpFrameInfo);
+    map_oleinplaceframeinfo16_32(&frameInfo32, lpFrameInfo);
     window_message16_32(lpmsg16, &msg32);
     result = OleTranslateAccelerator(lpFrame32, &frameInfo32, &msg32);
     return hresult32_16(result);
@@ -832,7 +830,7 @@ HRESULT WINAPI OleRegGetMiscStatus16(REFCLSID clsid, DWORD dwAspect, DWORD *pdwS
     return hresult32_16(OleRegGetMiscStatus(clsid, dwAspect, pdwStatus));
 }
 
-SEGPTR WINAPI dynamic_get_task_imalloc16(SEGPTR *lpMalloc)
+HRESULT WINAPI dynamic_get_task_imalloc16(SEGPTR *lpMalloc)
 {
     static HRESULT(WINAPI*pget_task_imalloc16)(SEGPTR *lpMalloc);
     if (!pget_task_imalloc16)
@@ -843,7 +841,10 @@ SEGPTR WINAPI dynamic_get_task_imalloc16(SEGPTR *lpMalloc)
             compobj = LoadLibraryW(L"COMPOBJ.DLL16");
         }
         pget_task_imalloc16 = (HRESULT(WINAPI*)(SEGPTR *lpMalloc))GetProcAddress(compobj, "get_task_imalloc16");
-        return E_FAIL;
+        if (!pget_task_imalloc16)
+        {
+            return E_FAIL;
+        }
     }
     return pget_task_imalloc16(lpMalloc);
 }
@@ -978,7 +979,7 @@ HRESULT WINAPI OleRegEnumFormatEtc16(REFCLSID clsid, DWORD dwDirection, SEGPTR *
     return hresult32_16(result);
 }
 
-HRESULT WINAPI OleDraw16(SEGPTR pUnk, DWORD dwAspect, HDC16 hdcDraw, const RECT16 const *lpcBounds)
+HRESULT WINAPI OleDraw16(SEGPTR pUnk, DWORD dwAspect, HDC16 hdcDraw, const RECT16 * const lpcBounds)
 {
     HRESULT result;
     RECT rect32;
@@ -1005,8 +1006,6 @@ HRESULT WINAPI OleDraw16(SEGPTR pUnk, DWORD dwAspect, HDC16 hdcDraw, const RECT1
 
 HRESULT WINAPI OleSaveToStream16(SEGPTR pPStm, SEGPTR pStm)
 {
-    CLSID clsid = { 0 };
-    HRESULT result;
     TRACE("(%08x,%08x)\n", pPStm, pStm);
     return hresult32_16(OleSaveToStream((IPersistStream*)iface16_32(&IID_IPersistStream, pPStm), (IStream*)iface16_32(&IID_IStream, pStm)));
 }
@@ -1091,9 +1090,6 @@ HGLOBAL16 WINAPI OleGetIconOfClass16(REFCLSID rclsid, LPSTR lpszLabel, BOOL fUse
 {
     LPOLESTR lpwszLabel;
     HGLOBAL hMetaPict;
-    METAFILEPICT *pict;
-    HGLOBAL16 hmf16;
-    DWORD len;
     TRACE("(%s,%s,%d)\n", debugstr_guid(rclsid), debugstr_a(lpszLabel), fUseTypeAsLabel);
     lpwszLabel = strdupAtoW(lpszLabel);
     hMetaPict = OleGetIconOfClass(rclsid, lpwszLabel, fUseTypeAsLabel);

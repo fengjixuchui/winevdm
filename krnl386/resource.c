@@ -222,9 +222,16 @@ static DWORD NE_FindNameTableId( NE_MODULE *pModule, LPCSTR typeId, LPCSTR resId
 
                 if (p[2] & 0x8000)
                 {
-                    if (!HIWORD(resId)) continue;
-                    if (strcasecmp( resId, (char*)(p+3)+strlen((char*)(p+3))+1 )) continue;
-
+                    if (HIWORD(resId))
+                    {
+                        if (strcasecmp( resId, (char*)(p+3)+strlen((char*)(p+3))+1 ))
+                            continue;
+                    }
+                    else
+                    {
+                        if (LOWORD(resId) != p[2])
+                            continue;
+                    }
                 }
                 else if (HIWORD(resId) || ((LOWORD(resId) & ~0x8000) != p[2]))
                   continue;
@@ -1036,7 +1043,7 @@ HGLOBAL16 WINAPI LoadResource16( HMODULE16 hModule, HRSRC16 hRsrc )
 
     if (pNameInfo)
     {
-        if (pNameInfo->handle && GlobalHandle16(pNameInfo->handle) && !(GlobalFlags16(pNameInfo->handle) & GMEM_DISCARDED))
+        if (pNameInfo->handle && GlobalHandle16(pNameInfo->handle) && !(GlobalFlags16(pNameInfo->handle) & GMEM_DISCARDED) && pNameInfo->usage)
         {
             pNameInfo->usage++;
             TRACE("  Already loaded, new count=%d\n", pNameInfo->usage );
@@ -1150,6 +1157,8 @@ BOOL16 WINAPI FreeResource16( HGLOBAL16 handle )
                             return handle;
                         }
                     }
+                    else if (!pNameInfo->usage && IsOldWindowsTask(GetCurrentTask()))
+                        return TRUE;
                     return FALSE;
                 }
                 pNameInfo++;
@@ -1170,7 +1179,7 @@ BOOL16 WINAPI FreeResource16( HGLOBAL16 handle )
         args[1] = handle;
         args[0] = 1;  /* CID_RESOURCE */
         WOWCallback16Ex( (SEGPTR)proc, WCB16_PASCAL, sizeof(args), args, &result );
-        return LOWORD(result);
+        return LOWORD(result) ? 0 : 1;
     }
     else
         return GlobalFree16( handle );
